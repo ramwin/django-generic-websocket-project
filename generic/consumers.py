@@ -2,10 +2,19 @@
 # -*- coding: utf-8 -*-
 # Xiang Wang <ramwin@qq.com>
 
+# pylint: disable=unused-argument,attribute-defined-outside-init
+# pylint: disable=arguments-renamed,missing-function-docstring,missing-class-docstring,arguments-differ
+
+"""
+基础功能，什么消息都直接发送
+"""
 
 import json
+import logging
 
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
@@ -33,4 +42,5 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # Receive message from room group
     async def message(self, event):
         data = event["data"]
+        LOGGER.info("收到消息: %s", data)
         await self.send(text_data=json.dumps(data))
