@@ -16,10 +16,10 @@ pip3 install -r ./requirements.txt
 python3 manage.py runserver
 
 # in terminal 2
-python3  测试链接websocket.py
+python3 test_send_message.py
 
 # in terminal 3
-python3 测试发送消息.py
+python3 test_receive_message.py
 ```
 
 # Deploy
