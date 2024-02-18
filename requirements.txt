@@ -3,3 +3,4 @@ channels[daphne]
 channels_redis
 websocket-client
 rel
+setuptools
