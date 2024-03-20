@@ -8,6 +8,8 @@ test if the webserver is working
 """
 
 
+import time
+
 import requests
 from dotenv import dotenv_values
 
@@ -26,6 +28,10 @@ def main():
     )
     if res.status_code != 200:
         raise Exception("webserver not working")
+    time.sleep(1)
+    res = requests.post(
+            f"{BASE_URL}/generic/send-message/room123/", {"action": "raise"}
+    )
 
 
 if __name__ == "__main__":
