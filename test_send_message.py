@@ -24,13 +24,13 @@ BASE_URL = CONFIG["BASE_URL"]
 def main():
     """send a message"""
     res = requests.post(
-            f"{BASE_URL}/generic/send-message/room123/", {123: 456}
+            f"{BASE_URL}/ws/generic/send-message/01/", {123: 456}
     )
     if res.status_code != 200:
         raise Exception("webserver not working")
     time.sleep(1)
     res = requests.post(
-            f"{BASE_URL}/generic/send-message/room123/", {"action": "raise"}
+            f"{BASE_URL}/ws/generic/send-message/01/", {"action": "raise"}
     )
 
 
