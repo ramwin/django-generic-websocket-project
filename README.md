@@ -34,3 +34,7 @@ ALLOWED_HOSTS = [<your hostname>]
 replace example.com with your hostname
 daphne -b <example.com> -p <port> wsbackend.asgi:application
 ```
+
+# load balance
+1. use `deploy/supervisor.conf` to run multi instance
+2. use `deploy/nginx/websocket.ramwin.com` to loadbalance
