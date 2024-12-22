@@ -4,3 +4,4 @@ channels_redis
 websocket-client
 rel
 setuptools
+djangorestframework
