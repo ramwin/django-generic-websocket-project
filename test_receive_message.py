@@ -48,7 +48,7 @@ def on_open(ws):
 if __name__ == "__main__":
     websocket.enableTrace(True)
     ws_app = websocket.WebSocketApp(
-            f"{BASE_WSS_URL}/generic/room123/",
+            f"{BASE_WSS_URL}/ws/generic/room123/",
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
