@@ -10,6 +10,7 @@ test if websocket server is working
 """
 
 
+import click
 import logging
 import json
 import rel
@@ -45,10 +46,12 @@ def on_close(ws, close_status_code, close_msg):
 def on_open(ws):
     print("Opened connection")
 
-if __name__ == "__main__":
+@click.command()
+@click.option("--room", default="room_123") 
+def main(room):
     websocket.enableTrace(True)
     ws_app = websocket.WebSocketApp(
-            f"{BASE_WSS_URL}/ws/generic/room123/",
+            f"{BASE_WSS_URL}/ws/generic/{room}/",
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
@@ -56,6 +59,5 @@ if __name__ == "__main__":
     )
     ws_app.run_forever()
 
-    # ws_app.run_forever(dispatcher=rel, reconnect=5)
-    # rel.signal(2, rel.abort)  # Keyboard Interrupt
-    # rel.dispatch()
+if __name__ == "__main__":
+    main()

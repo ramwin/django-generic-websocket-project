@@ -26,18 +26,13 @@ LOGGER = logging.getLogger(__name__)
 
 def main():
     """send a message"""
-    websocket_url = f"{BASE_URL}/ws/generic/send-message/room123/"
-    LOGGER.info("websocket_url: %s", websocket_url)
-    res = requests.post(
-            websocket_url, {123: 456}
-    )
-    if res.status_code != 200:
-        print(res.text)
-        raise Exception("webserver not working")
-    time.sleep(1)
-    res = requests.post(
-            f"{BASE_URL}/ws/generic/send-message/room123/", {"action": "raise"}
-    )
+    for room in ["room_123", "room_a", "room_A12B"]:
+        websocket_url = f"{BASE_URL}/ws/generic/send-message/{room}/"
+        LOGGER.info("websocket_url: %s", websocket_url)
+        res = requests.post(
+                websocket_url, {123: 456}
+        )
+        res.raise_for_status()
 
 
 if __name__ == "__main__":
