@@ -30,7 +30,7 @@ def main():
         websocket_url = f"{BASE_URL}/ws/generic/send-message/{room}/"
         LOGGER.info("websocket_url: %s", websocket_url)
         res = requests.post(
-                websocket_url, {123: 456}
+                websocket_url, {"room": room}
         )
         res.raise_for_status()
 
