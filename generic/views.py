@@ -24,9 +24,6 @@ class MessageView(APIView):
         )
         return Response({})
 
-
-class InfoView(APIView):
-
     def get(self, request, *args, **kwargs) -> Response:
         return Response({
             "start server commands": sys.argv,

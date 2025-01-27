@@ -11,5 +11,4 @@ from . import views
 urlpatterns = [
         path("send-message/<slug:room_name>/",
              views.MessageView.as_view()),
-        path("info/", views.InfoView.as_view()),
 ]
