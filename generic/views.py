@@ -1,3 +1,6 @@
+import os
+import sys
+
 from django.shortcuts import render
 
 from channels.layers import get_channel_layer
@@ -20,3 +23,13 @@ class MessageView(APIView):
                 },
         )
         return Response({})
+
+
+class InfoView(APIView):
+
+    def get(self, request, *args, **kwargs) -> Response:
+        return Response({
+            "start server commands": sys.argv,
+            "headers": request._request.headers,
+            "processid": os.getpid(),
+        })
