@@ -2,29 +2,29 @@ server {
     listen 80;
     server_name websocket.ramwin.com;
     # use suffix as router
-    location ~ "^/ws/generic/send-message/user_[0-9]*[0-5]+/$" {
+    location ~ "^/ws/generic/send-message/user_[0-9]*[0-4]+/$" {
         proxy_pass http://localhost:7430;
-        proxy_set_header throught "suffix0-5";
+        proxy_set_header through "suffix0-5";
     }
-    location ~ "^/ws/generic/user_[0-9]*[0-5]+/$" {
+    location ~ "^/ws/generic/user_[0-9]*[0-4]+/$" {
         proxy_pass http://localhost:7430;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "Upgrade";
-        proxy_set_header throught "suffix0-5";
+        proxy_set_header through "suffix0-5";
     }
-    location ~ "^/ws/generic/send-message/user_[0-9]*[1-4]+/$" {
+    location ~ "^/ws/generic/send-message/user_[0-9]*[5-9]+/$" {
         proxy_pass http://localhost:7431;
-        proxy_set_header throught "suffix1-4";
+        proxy_set_header through "suffix1-4";
     }
-    location ~ "^/ws/generic/user_[0-9]*[1-4]+/$" {
+    location ~ "^/ws/generic/user_[0-9]*[5-9]+/$" {
         proxy_pass http://localhost:7431;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "Upgrade";
-        proxy_set_header throught "suffix1-4";
+        proxy_set_header through "suffix1-4";
     }
     location ~ "^/ws/generic/send-message/user_[0-5]+" {
         proxy_pass http://localhost:7430;
@@ -66,6 +66,6 @@ server {
         proxy_set_header Host $http_host;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "Upgrade";
-        proxy_set_header throught "default";
+        proxy_set_header through "default";
     }
 }
