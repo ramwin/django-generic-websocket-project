@@ -1,5 +1,5 @@
 server {
-    listen 57419;
+    listen 80;
     server_name websocket.ramwin.com;
     # use suffix as router
     location ~ "^/ws/generic/send-message/user_[0-9]*[0-5]+/$" {
@@ -57,7 +57,7 @@ server {
         proxy_set_header Connection "Upgrade";
     }
     location / {
-        proxy_pass http://localhost:57422;
+        proxy_pass http://localhost:7430;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header Upgrade $http_upgrade;
