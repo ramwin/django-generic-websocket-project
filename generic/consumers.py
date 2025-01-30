@@ -34,6 +34,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     # Receive message from WebSocket
     async def receive(self, text_data):
         data = json.loads(text_data)
+        LOGGER.info("receive message: %s in %s", data, self.channel_layer.group_send)
         await self.channel_layer.group_send(
             self.room_group_name,
             {"type": "message", "data": data}

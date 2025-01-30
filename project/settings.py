@@ -14,6 +14,7 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from split_settings.tools import include
 
 CONFIG = {
         **dotenv_values(".env.shared"),
@@ -142,3 +143,7 @@ CHANNEL_LAYERS = {
         },
     },
 }
+
+include(
+        "logging_settings.py",
+)
