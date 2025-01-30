@@ -10,13 +10,14 @@ test if websocket server is working
 """
 
 
-import click
+import time
 import logging
 import json
 import rel
 
-from dotenv import dotenv_values
+import click
 import websocket
+from dotenv import dotenv_values
 
 
 logging.basicConfig(level=logging.INFO)
@@ -31,6 +32,7 @@ LOGGER = logging.getLogger(__name__)
 def on_message(ws, message):
     data = json.loads(message)
     LOGGER.info("here comes message: %s", data)
+    time.sleep(0.03)
     if data.get("action") == "raise":
         LOGGER.info("get raise action")
         raise ValueError

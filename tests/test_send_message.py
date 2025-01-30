@@ -35,5 +35,16 @@ def main():
         res.raise_for_status()
 
 
+def send_many_message():
+    for i in range(1000):
+        room = "room_a"
+        websocket_url = f"{BASE_URL}/ws/generic/send-message/{room}/"
+        LOGGER.info("websocket_url: %s", websocket_url)
+        res = requests.post(
+            websocket_url, {"room": room, "i": i}
+        )
+        res.raise_for_status()
+
+
 if __name__ == "__main__":
-    main()
+    send_many_message()
