@@ -10,11 +10,14 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import os
+
 from pathlib import Path
 
 from dotenv import dotenv_values
 
 from split_settings.tools import include
+from typing import List
 
 CONFIG = {
         **dotenv_values(".env.shared"),
@@ -34,7 +37,7 @@ SECRET_KEY = 'django-insecure-5gl90n3ws*wfeot5#ns1n(0mojv6rz9^hemv6y-%#r=3^zj%(f
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = CONFIG.get("DEBUG") == "True"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS: List[str] = []
 if CONFIG.get("ALLOWED_HOSTS"):
     ALLOWED_HOSTS = CONFIG["ALLOWED_HOSTS"].split(";")
 
@@ -135,11 +138,12 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 ASGI_APPLICATION = "project.asgi.application"
+REDIS_PORT = int(os.environ.get("WEBSOCKET_REDIS_PORT", 6379))
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("127.0.0.1", 6379)],
+            "hosts": [("127.0.0.1", REDIS_PORT)],
         },
     },
 }
