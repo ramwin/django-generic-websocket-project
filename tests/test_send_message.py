@@ -43,6 +43,7 @@ def send_many_message():
         res = requests.post(
             websocket_url, {"room": room, "i": i}
         )
+        LOGGER.info(res.text)
         res.raise_for_status()
 
 
