@@ -10,11 +10,13 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/4.2/ref/settings/
 """
 
+import logging
 import os
 
 from pathlib import Path
 
 from dotenv import dotenv_values
+from redis import Redis
 
 from split_settings.tools import include
 from typing import List
@@ -26,6 +28,7 @@ CONFIG = {
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+LOGGER = logging.getLogger(__name__)
 
 
 # Quick-start development settings - unsuitable for production
@@ -141,6 +144,13 @@ ASGI_APPLICATION = "project.asgi.application"
 
 REDIS_PORT = CONFIG.get("WEBSOCKET_REDIS_PORT") or int(os.environ.get("WEBSOCKET_REDIS_PORT", 6379))
 REDIS_HOST = CONFIG.get("WEBSOCKET_REDIS_HOST") or os.environ.get("WEBSOCKET_REDIS_HOST", "localhost")
+
+REDIS = Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2, socket_connect_timeout=2)
+try:
+    REDIS.get('foo')
+except Exception as error:
+    LOGGER.error("cannot connect to server: %s %s", REDIS_HOST, REDIS_PORT)
+    raise
 
 CHANNEL_LAYERS = {
     "default": {
