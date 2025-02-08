@@ -138,12 +138,15 @@ STATIC_URL = 'static/'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 ASGI_APPLICATION = "project.asgi.application"
-REDIS_PORT = int(os.environ.get("WEBSOCKET_REDIS_PORT", 6379))
+
+REDIS_PORT = CONFIG.get("WEBSOCKET_REDIS_PORT") or int(os.environ.get("WEBSOCKET_REDIS_PORT", 6379))
+REDIS_HOST = CONFIG.get("WEBSOCKET_REDIS_HOST") or os.environ.get("WEBSOCKET_REDIS_HOST", "localhost")
+
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("127.0.0.1", REDIS_PORT)],
+            "hosts": [(REDIS_HOST, REDIS_PORT)],
         },
     },
 }
