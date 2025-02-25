@@ -80,6 +80,7 @@ loggers = {
     'school': { 'handlers': DEFAULT_HANDLERS, 'level': "INFO", "propagate": False },
     'channels': { 'handlers': DEFAULT_HANDLERS, 'level': "INFO", "propagate": False },
     'channels_redis': { 'handlers': DEFAULT_HANDLERS, 'level': "INFO", "propagate": False },
+    'generic': { 'handlers': DEFAULT_HANDLERS, 'level': "INFO", "propagate": False },
 }
 
 LOGGING = {

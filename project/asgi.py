@@ -7,9 +7,14 @@ For more information on this file, see
 https://docs.djangoproject.com/en/4.2/howto/deployment/asgi/
 """
 
+import logging
 import os
+from typing import Union
+
+from redis import Redis
 
 from django.core.asgi import get_asgi_application
+from django.contrib.auth.models import User, AnonymousUser
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
@@ -18,12 +23,39 @@ from generic.routing import websocket_urlpatterns
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")
 django_asgi_app = get_asgi_application()
+REDIS = Redis(decode_responses=True)
+LOGGER = logging.getLogger("generic")
+
+
+class MyAuthMiddleware:
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        LOGGER.info("prepare to auth user: %s %s %s %s", self, scope, receive, send)
+        LOGGER.info("headers: %s %s", scope["headers"], type(scope["headers"]))
+        scope["user"] = AnonymousUser()
+        for key, value in scope["headers"]:
+            if key == b"authorization":
+                scope["user"] = self.get_user(value)
+        await self.app(scope, receive, send)
+
+    def get_user(self, token: bytes) -> Union[User, AnonymousUser]:
+        # TODO here you need to generate user from token
+        # e.g store the token in redis and get user info from redis
+        if token == b"tokenabc":
+            return User(id=1, username="abc")
+        if token == b"token123":
+            return User(id=1, username="123")
+        return AnonymousUser()
+
 
 application = ProtocolTypeRouter(
     {
         "http": django_asgi_app,
         "websocket": AllowedHostsOriginValidator(
-            AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
+            MyAuthMiddleware(URLRouter(websocket_urlpatterns))
         ),
     }
 )

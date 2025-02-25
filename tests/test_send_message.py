@@ -36,7 +36,7 @@ def main():
 
 
 def send_many_message():
-    for i in range(1000):
+    for i in range(1):
         room = "room_a"
         websocket_url = f"{BASE_URL}/ws/generic/send-message/{room}/"
         LOGGER.info("websocket_url: %s", websocket_url)

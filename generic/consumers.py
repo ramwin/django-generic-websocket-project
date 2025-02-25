@@ -18,13 +18,18 @@ LOGGER = logging.getLogger(__name__)
 
 
 class ChatConsumer(AsyncWebsocketConsumer):
+    need_auth = False
+
     async def connect(self):
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         self.room_group_name = f"{self.room_name}"
 
-        # Join room group
-        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
+        LOGGER.info("current connect user: %s", self.scope["user"])
 
+        if self.need_auth and not self.scope['user'].is_authenticated:
+            self.close(3000)
+            return
+        await self.channel_layer.group_add(self.room_group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):

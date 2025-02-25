@@ -58,6 +58,9 @@ def main(room):
             on_message=on_message,
             on_error=on_error,
             on_close=on_close,
+            header={
+                "Authorization": "token123",
+            },
     )
     ws_app.run_forever()
 
