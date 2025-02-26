@@ -10,6 +10,7 @@ https://docs.djangoproject.com/en/4.2/howto/deployment/asgi/
 import logging
 import os
 from typing import Union
+from urllib.parse import parse_qs
 
 from redis import Redis
 
@@ -39,6 +40,10 @@ class MyAuthMiddleware:
         for key, value in scope["headers"]:
             if key == b"authorization":
                 scope["user"] = self.get_user(value)
+        LOGGER.info("登录的query: %s", scope['query_string'])
+        for query_string, query_values in parse_qs(scope['query_string']).items():
+            if query_string == b"token":
+                scope["user"] = self.get_user(query_values[0])
         await self.app(scope, receive, send)
 
     def get_user(self, token: bytes) -> Union[User, AnonymousUser]:

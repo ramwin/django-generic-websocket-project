@@ -21,6 +21,7 @@ LOGGER = logging.getLogger(__name__)
 
 class ChatConsumer(AsyncWebsocketConsumer):
     need_auth = False
+    # need_auth = True
 
     async def connect(self):
         LOGGER.info("new user comes: %s %s", type(self.channel_name), self.channel_name)

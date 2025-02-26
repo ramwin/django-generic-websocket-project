@@ -54,14 +54,14 @@ def on_open(ws):
 def main(room, auth):
     websocket.enableTrace(True)
     ws_app = websocket.WebSocketApp(
-            f"{BASE_WSS_URL}/ws/generic/{room}/",
+            f"{BASE_WSS_URL}/ws/generic/{room}/?token={auth}",
             on_open=on_open,
             on_message=on_message,
             on_error=on_error,
             on_close=on_close,
-            header={
-                "Authorization": auth,
-            },
+            # header={
+            #     "Authorization": auth,
+            # },
     )
     ws_app.run_forever()
 
