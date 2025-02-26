@@ -11,8 +11,10 @@
 
 import json
 import logging
+from typing import cast
 
 from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.layers import BaseChannelLayer
 
 LOGGER = logging.getLogger(__name__)
 
@@ -30,12 +32,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if self.need_auth and not self.scope['user'].is_authenticated:
             self.close(3000)
             return
+        assert isinstance(self.channel_layer, BaseChannelLayer)
         await self.channel_layer.group_add("all_user", self.channel_name)
         await self.channel_layer.group_add(self.room_group_name, self.channel_name)
         await self.accept()
 
     async def disconnect(self, close_code):
         # Leave room group
+        await self.channel_layer.group_discard("all_user", self.channel_name)
         await self.channel_layer.group_discard(self.room_group_name, self.channel_name)
 
     # Receive message from WebSocket
