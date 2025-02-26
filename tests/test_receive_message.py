@@ -50,7 +50,8 @@ def on_open(ws):
 
 @click.command()
 @click.option("--room", default="room_123") 
-def main(room):
+@click.option("--auth", default="token123")
+def main(room, auth):
     websocket.enableTrace(True)
     ws_app = websocket.WebSocketApp(
             f"{BASE_WSS_URL}/ws/generic/{room}/",
@@ -59,7 +60,7 @@ def main(room):
             on_error=on_error,
             on_close=on_close,
             header={
-                "Authorization": "token123",
+                "Authorization": auth,
             },
     )
     ws_app.run_forever()
