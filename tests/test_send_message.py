@@ -11,6 +11,7 @@ test if the webserver is working
 import logging
 import time
 
+import click
 import requests
 from dotenv import dotenv_values
 
@@ -24,15 +25,16 @@ BASE_URL = CONFIG["BASE_URL"]
 LOGGER = logging.getLogger(__name__)
 
 
-def main():
+@click.command()
+@click.option("--room", default="room_123", help="发送消息到哪个房间")
+def main(room: str):
     """send a message"""
-    for room in ["room_123", "room_a", "room_A12B"]:
-        websocket_url = f"{BASE_URL}/ws/generic/send-message/{room}/"
-        LOGGER.info("websocket_url: %s", websocket_url)
-        res = requests.post(
-                websocket_url, {"room": room}
-        )
-        res.raise_for_status()
+    websocket_url = f"{BASE_URL}/ws/generic/send-message/{room}/"
+    LOGGER.info("websocket_url: %s", websocket_url)
+    res = requests.post(
+            websocket_url, {"room": room}
+    )
+    res.raise_for_status()
 
 
 def send_many_message():
@@ -48,4 +50,4 @@ def send_many_message():
 
 
 if __name__ == "__main__":
-    send_many_message()
+    main()
