@@ -21,6 +21,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     need_auth = False
 
     async def connect(self):
+        LOGGER.info("new user comes: %s %s", type(self.channel_name), self.channel_name)
         self.room_name = self.scope["url_route"]["kwargs"]["room_name"]
         self.room_group_name = f"{self.room_name}"
 
