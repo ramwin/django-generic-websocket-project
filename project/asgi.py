@@ -15,7 +15,6 @@ from urllib.parse import parse_qs
 from redis import Redis
 
 from django.core.asgi import get_asgi_application
-from django.contrib.auth.models import User, AnonymousUser
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
 from channels.security.websocket import AllowedHostsOriginValidator
@@ -34,6 +33,7 @@ class MyAuthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
+        from django.contrib.auth.models import AnonymousUser
         LOGGER.info("prepare to auth user: %s %s %s %s", self, scope, receive, send)
         LOGGER.info("headers: %s %s", scope["headers"], type(scope["headers"]))
         scope["user"] = AnonymousUser()
@@ -46,7 +46,9 @@ class MyAuthMiddleware:
                 scope["user"] = self.get_user(query_values[0])
         await self.app(scope, receive, send)
 
-    def get_user(self, token: bytes) -> Union[User, AnonymousUser]:
+    def get_user(self, token: bytes):
+        from django.contrib.auth.models import User, AnonymousUser
+        # Union[User, AnonymousUser]
         # TODO here you need to generate user from token
         # e.g store the token in redis and get user info from redis
         if token == b"tokenabc":
