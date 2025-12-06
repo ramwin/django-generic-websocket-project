@@ -56,6 +56,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     "generic",
+    "health_check",
 ]
 
 MIDDLEWARE = [

@@ -19,6 +19,7 @@ from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('ht/', include('health_check.urls')),
     path('ws/generic/', include("generic.urls")),
     path('ws/pair/', include("generic.urls")),
 ]
