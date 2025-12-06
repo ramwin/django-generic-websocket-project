@@ -8,3 +8,5 @@ djangorestframework
 python-dotenv
 colorlog
 django-split-settings
+humanfriendly
+django-health-check
