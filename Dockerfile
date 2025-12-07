@@ -16,6 +16,7 @@ RUN pip install djangorestframework
 RUN pip install python-dotenv
 RUN pip install colorlog
 RUN pip install django-split-settings
+RUN pip install humanfriendly
 
 # finally install
 

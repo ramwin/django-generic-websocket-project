@@ -3,4 +3,4 @@
 
 set -ex
 
-docker build . -t django-generic-websocket-project
+docker build . -t django-generic-websocket-project --network host

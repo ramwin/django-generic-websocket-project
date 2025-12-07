@@ -4,7 +4,7 @@
 set -ex
 
 
-./docker_build.sh
+./docker/docker_build.sh
 
 docker network create websocket-network
 
