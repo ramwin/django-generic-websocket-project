@@ -23,6 +23,6 @@ COPY ./ /home/websocket/django-generic-websocket-project
 
 RUN pip install -r requirements.txt
 
-ENTRYPOINT python -m daphne -b 0.0.0.0 -p 7419 project.asgi:application
+CMD python -m daphne -b 0.0.0.0 -p 7419 project.asgi:application
 
 EXPOSE 7419
