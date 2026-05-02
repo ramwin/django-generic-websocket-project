@@ -13,6 +13,9 @@ docker run \
     --network websocket-network \
     --rm --name redis \
     -d -p 6380:6379 \
+    --log-driver json-file \
+    --log-opt max-size=10m \
+    --log-opt max-file=3 \
     redis --save ""
 
 echo "start websocket service"
@@ -24,5 +27,8 @@ docker run --rm \
     -p 7420:7419 \
     --name websocket \
     --network websocket-network \
+    --log-driver json-file \
+    --log-opt max-size=10m \
+    --log-opt max-file=3 \
     django-generic-websocket-project
     # --network host \

@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: websocket-redis
+    command: redis-server --save ""
+    restart: unless-stopped
+    networks:
+      - websocket-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  websocket:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: websocket-app
+    restart: unless-stopped
+    ports:
+      - "7420:7419"
+    environment:
+      - WEBSOCKET_REDIS_HOST=redis
+      - WEBSOCKET_REDIS_PORT=6379
+      - DEBUG=False
+    depends_on:
+      - redis
+    networks:
+      - websocket-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  websocket-network:
+    driver: bridge
