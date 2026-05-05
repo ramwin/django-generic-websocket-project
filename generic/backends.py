@@ -2,26 +2,21 @@
 # -*- coding: utf-8 -*-
 # Xiang Wang <ramwin@qq.com>
 
+import dataclasses
+
 from humanfriendly import parse_size
 
 from django.conf import settings
 
-from health_check.backends import BaseHealthCheckBackend
+from health_check.base import HealthCheck
+from health_check.exceptions import ServiceUnavailable
 
 
-class MyHealthCheckBackend(BaseHealthCheckBackend):
-    #: The status endpoints will respond with a 200 status code
-    #: even if the check errors.
-    critical_service = False
+@dataclasses.dataclass
+class MyHealthCheck(HealthCheck):
+    """自定义健康检查：监控 Redis 内存使用。"""
 
-    def check_status(self) -> None:
-        # The test code goes here.
-        # You can use `self.add_error` or
-        # raise a `HealthCheckException`,
-        # similar to Django's form validation.
+    async def run(self) -> None:
         for key in ["used_memory_rss", "used_memory"]:
             if settings.REDIS.info("memory")[key] > parse_size("1GiB"):
-                self.add_error(f"{settings.REDIS}内存过大")
-
-    def identifier(self):
-        return self.__class__.__name__  # Display name on the endpoint.
+                raise ServiceUnavailable(f"{settings.REDIS} 内存过大")

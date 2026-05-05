@@ -1,13 +1,11 @@
-version: "3.8"
-
 services:
   redis:
     image: redis:7-alpine
-    container_name: websocket-redis
+    container_name: ${REDIS_CONTAINER_NAME:-websocket-redis}
     command: redis-server --save ""
     restart: unless-stopped
     networks:
-      - websocket-network
+      - app-network
     logging:
       driver: "json-file"
       options:
@@ -18,18 +16,18 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: websocket-app
+    container_name: ${WEBSOCKET_CONTAINER_NAME:-websocket-app}
     restart: unless-stopped
     ports:
-      - "7420:7419"
+      - "${WEBSOCKET_PORT:-7420}:${WEBSOCKET_INTERNAL_PORT:-7419}"
     environment:
-      - WEBSOCKET_REDIS_HOST=redis
-      - WEBSOCKET_REDIS_PORT=6379
-      - DEBUG=False
+      - WEBSOCKET_REDIS_HOST=${WEBSOCKET_REDIS_HOST:-redis}
+      - WEBSOCKET_REDIS_PORT=${WEBSOCKET_REDIS_PORT:-6379}
+      - DEBUG=${DEBUG:-False}
     depends_on:
       - redis
     networks:
-      - websocket-network
+      - app-network
     logging:
       driver: "json-file"
       options:
@@ -37,5 +35,6 @@ services:
         max-file: "3"
 
 networks:
-  websocket-network:
+  app-network:
+    name: ${DOCKER_NETWORK_NAME:-websocket-network}
     driver: bridge

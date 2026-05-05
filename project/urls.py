@@ -16,10 +16,28 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from health_check.views import HealthCheckView
+
+from generic.backends import MyHealthCheck
+
+
+class CustomHealthCheckView(HealthCheckView):
+    """扩展默认健康检查视图，加入自定义 Redis 内存检查。"""
+
+    checks = (
+        "health_check.checks.Cache",
+        "health_check.checks.Database",
+        "health_check.checks.DNS",
+        "health_check.checks.Mail",
+        "health_check.checks.Storage",
+        MyHealthCheck,
+    )
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('ht/', include('health_check.urls')),
+    path('ht/', CustomHealthCheckView.as_view(), name='health_check_home'),
+    path('ht/<str:subset>/', CustomHealthCheckView.as_view(), name='health_check_subset'),
     path('ws/generic/', include("generic.urls")),
     path('ws/pair/', include("generic.urls")),
 ]

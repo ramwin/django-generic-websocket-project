@@ -223,7 +223,7 @@ python tests/test_receive_message.py --room room_123 --auth token123
 | 增加持久化（消息记录） | `generic/models.py` + `consumers.py` | 在 `receive()` 或 `message()` 中存库 |
 | 增加新的 WebSocket 路由 | `generic/routing.py` + 新 Consumer | 仿照 `ChatConsumer` |
 | 调整日志 | `project/logging_settings.py` | split_settings 已引入 |
-| 调整健康检查逻辑 | `generic/backends.py` | 继承 `BaseHealthCheckBackend` |
+| 调整健康检查逻辑 | `generic/backends.py` | 继承 `HealthCheck` dataclass，实现 `run()` 方法 |
 
 ---
 

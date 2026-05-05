@@ -13,7 +13,7 @@ pip3 install -r ./requirements.txt
 # Usage
 ```
 # in terminal 1
-python3 manage.py runserver 57419
+python3 manage.py runserver 7420
 
 # in terminal 2
 python3 test_send_message.py
