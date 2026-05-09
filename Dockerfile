@@ -2,15 +2,11 @@ FROM python
 
 MAINTAINER Xiang Wang "ramwin@qq.com"
 
-RUN apt-get update \
-	&& apt-get install -y --no-install-recommends \
-		postgresql-client \
-	&& rm -rf /var/lib/apt/lists/*
-
 WORKDIR /home/websocket/django-generic-websocket-project
 
 COPY requirements.txt ./
-RUN pip install -r ./requirements.txt
+RUN curl https://ramwin.com/
+RUN pip install -r ./requirements.txt --extra-index-url https://pypi.tuna.tsinghua.edu.cn/simple
 
 COPY ./ ./
 
