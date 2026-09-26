@@ -57,4 +57,9 @@
             apiKeyFile: ~/github/secret/bashrc
             authStyle: bearer
             model: deepseek-v4-pro[1m]
-            maxTokens: 4096
+            maxTokens: 8192
+            # 这个端点默认开思考，而且会把 max_tokens 全花在 thinking 上，
+            # 正文就空了（实测同一配置时好时坏）。显式关掉最可靠也最省：
+            # 同一条评审 prompt，关掉思考只花 240 个输出 token 就给出了完整结论。
+            # 想开思考就改成 budget（配合 thinkingBudgetTokens）。
+            thinking: disabled

@@ -48,6 +48,8 @@ const participantConfig = z.object({
     apiKeyEnv: z.string(),
     apiKeyFile: z.string(),
     authStyle: z.string(),
+    thinking: z.string(),
+    thinkingBudgetTokens: z.natural(),
     model: z.string(),
     maxTokens: z.natural(),
     anthropicVersion: z.string(),

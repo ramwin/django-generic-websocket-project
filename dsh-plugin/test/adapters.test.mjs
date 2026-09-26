@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { authHeaders, callClaudeApi, messagesEndpoint } from '../lib/adapters/claude-api.js';
+import { authHeaders, callClaudeApi, messagesEndpoint, thinkingConfig } from '../lib/adapters/claude-api.js';
 import { callKimiCli, stripBullet } from '../lib/adapters/kimi-cli.js';
 import { callOpenAiApi, chatEndpoint } from '../lib/adapters/openai-api.js';
 import { collectReviews, reviewWithParticipant } from '../lib/adapters/index.js';
@@ -322,4 +322,72 @@ test('claude-api：缺 key 时的报错要提到 apiKeyFile 这条出路', async
             env: {},
         }),
         /apiKeyFile.*ANTHROPIC_AUTH_TOKEN/s);
+});
+
+test('claude-api：只有 thinking 没正文时，自动关掉思考重试一次', async () => {
+    const bodies = [];
+    const fetchImpl = async (url, init) => {
+        bodies.push(JSON.parse(init.body));
+        // 第一次只回 thinking（模拟思考把预算吃光），第二次（关思考后）给正文
+        return bodies.length === 1
+            ? jsonResponse({ content: [{ type: 'thinking', thinking: '想很久……' }] })
+            : jsonResponse({ content: [{ type: 'text', text: '结论\nVERDICT: approve' }] });
+    };
+    const result = await callClaudeApi({
+        prompt: 'x',
+        participant: { baseUrl: 'https://h', model: 'm', apiKey: 'k', thinking: 'auto' },
+        fetchImpl,
+    });
+    assert.equal(result.text, '结论\nVERDICT: approve');
+    assert.equal(bodies.length, 2, '应该重试了一次');
+    assert.equal('thinking' in bodies[0], false, '第一次按 auto 不传 thinking');
+    assert.deepEqual(bodies[1].thinking, { type: 'disabled' }, '重试时关掉思考');
+});
+
+test('thinkingConfig：三种模式的翻译（注意 YAML 里 off/on 会变布尔值，所以用 disabled）', () => {
+    assert.equal(thinkingConfig({}), undefined);
+    assert.equal(thinkingConfig({ thinking: 'auto' }), undefined);
+    assert.deepEqual(thinkingConfig({ thinking: 'disabled' }), { type: 'disabled' });
+    assert.deepEqual(thinkingConfig({ thinking: 'budget' }),
+        { type: 'enabled', budget_tokens: 2048 });
+    assert.deepEqual(thinkingConfig({ thinking: 'budget', thinkingBudgetTokens: 512 }),
+        { type: 'enabled', budget_tokens: 512 });
+    // override 优先（重试用）
+    assert.deepEqual(thinkingConfig({ thinking: 'budget' }, 'disabled'),
+        { type: 'disabled' });
+});
+
+test('claude-api：配了 thinking=disabled 时，第一次请求就带上', async () => {
+    let seen = null;
+    await callClaudeApi({
+        prompt: 'x',
+        participant: { baseUrl: 'https://h', model: 'm', apiKey: 'k', thinking: 'disabled' },
+        fetchImpl: async (url, init) => {
+            seen = JSON.parse(init.body);
+            return jsonResponse({ content: [{ type: 'text', text: 'ok\nVERDICT: approve' }] });
+        },
+    });
+    assert.deepEqual(seen.thinking, { type: 'disabled' });
+});
+
+test('claude-api：关掉思考后仍然没有正文才报错', async () => {
+    await assert.rejects(
+        () => callClaudeApi({
+            prompt: 'x',
+            participant: { baseUrl: 'https://h', model: 'm', apiKey: 'k', thinking: 'disabled' },
+            fetchImpl: async () => jsonResponse({
+                content: [{ type: 'thinking', thinking: '还是在想' }],
+            }),
+        }),
+        /即使关掉 thinking 仍然只返回思考/);
+});
+
+test('claude-api：既没 thinking 也没 text 时，还是报「空内容」', async () => {
+    await assert.rejects(
+        () => callClaudeApi({
+            prompt: 'x',
+            participant: { baseUrl: 'https://h', model: 'm', apiKey: 'k' },
+            fetchImpl: async () => jsonResponse({ content: [] }),
+        }),
+        /返回了空内容/);
 });

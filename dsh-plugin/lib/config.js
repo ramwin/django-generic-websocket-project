@@ -44,8 +44,15 @@ export const DEFAULT_PARTICIPANTS = {
         // 'api-key' → x-api-key（Anthropic 官方）；'bearer' → Authorization: Bearer
         // （Claude Code 的 ANTHROPIC_AUTH_TOKEN、以及多数中转都用这种）
         authStyle: 'api-key',
+        // 思考模式：auto（不传，由端点决定）/ disabled（关掉）/ budget（设上限）
+        // 有些端点默认开思考，且会把 max_tokens 全花在思考上导致没有正文，
+        // 那种情况用 disabled 最可靠。
+        thinking: 'auto',
+        thinkingBudgetTokens: 2048,
         model: 'claude-sonnet-4-5',
-        maxTokens: 4096,
+        // 别设太小：开了思考模式的模型会把预算花在 thinking 上，
+        // 正文就没有位置了（实测 4096 不够，整个评审会被判成「空内容」）。
+        maxTokens: 8192,
         anthropicVersion: '2023-06-01',
         headers: {},
     },
