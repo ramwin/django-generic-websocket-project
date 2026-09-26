@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-ai-council",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI Council for DeepSeek Harness: 让 DeepSeek 做计划/编码/执行/评价，每一步都交给 Kimi、Claude 等异模型迭代评审，并在每轮 AI 反馈后留出 3 秒人工打断窗口。底层复用 django-generic-websocket-project 的 HTTP + WebSocket 广播服务。",
   "type": "module",
   "main": "lib/index.js",
