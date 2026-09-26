@@ -16,7 +16,7 @@ import os
 from pathlib import Path
 
 from dotenv import dotenv_values
-from redis import Redis
+from django.core.exceptions import ImproperlyConfigured
 
 from split_settings.tools import include
 from typing import List
@@ -146,21 +146,46 @@ ASGI_APPLICATION = "project.asgi.application"
 REDIS_PORT = CONFIG.get("WEBSOCKET_REDIS_PORT") or int(os.environ.get("WEBSOCKET_REDIS_PORT", 6379))
 REDIS_HOST = CONFIG.get("WEBSOCKET_REDIS_HOST") or os.environ.get("WEBSOCKET_REDIS_HOST", "localhost")
 
-REDIS = Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2, socket_connect_timeout=2)
-try:
-    REDIS.get('foo')
-except Exception as error:
-    LOGGER.error("cannot connect to server: %s %s", REDIS_HOST, REDIS_PORT)
-    raise
+# channel layer 后端，通过 .env.shared / .env（后者优先）配置：
+#   memory（默认）：进程内内存广播，不需要 redis 服务和 channels_redis 依赖，只适合单进程
+#   redis：多实例共享广播，需要 redis 服务，并额外 pip install channels_redis
+CHANNEL_LAYER_BACKEND = (
+        CONFIG.get("CHANNEL_LAYER_BACKEND")
+        or os.environ.get("CHANNEL_LAYER_BACKEND")
+        or "memory"
+).strip().lower()
 
-CHANNEL_LAYERS = {
-    "default": {
-        "BACKEND": "channels_redis.core.RedisChannelLayer",
-        "CONFIG": {
-            "hosts": [(REDIS_HOST, REDIS_PORT)],
+if CHANNEL_LAYER_BACKEND in ("memory", "in-memory", "inmemory"):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
         },
-    },
-}
+    }
+    LOGGER.warning(
+            "CHANNEL_LAYER_BACKEND=%s 消息只在当前进程内广播，"
+            "多实例部署（如 deploy/supervisor.conf）必须改成 redis", CHANNEL_LAYER_BACKEND)
+elif CHANNEL_LAYER_BACKEND == "redis":
+    # 只有用 redis 时才导入 redis 包，保证默认配置下不依赖它
+    from redis import Redis
+
+    REDIS = Redis(host=REDIS_HOST, port=REDIS_PORT, socket_timeout=2, socket_connect_timeout=2)
+    try:
+        REDIS.get('foo')
+    except Exception as error:
+        LOGGER.error("cannot connect to server: %s %s", REDIS_HOST, REDIS_PORT)
+        raise
+
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels_redis.core.RedisChannelLayer",
+            "CONFIG": {
+                "hosts": [(REDIS_HOST, REDIS_PORT)],
+            },
+        },
+    }
+else:
+    raise ImproperlyConfigured(
+            f"CHANNEL_LAYER_BACKEND 只能是 memory 或 redis，当前是 {CHANNEL_LAYER_BACKEND!r}")
 
 include(
         "logging_settings.py",

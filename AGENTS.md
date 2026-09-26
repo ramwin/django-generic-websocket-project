@@ -4,7 +4,7 @@
 
 ## 一、项目概述
 
-一个基于 **Django + Django Channels** 的通用 WebSocket 实时消息推送服务模板。核心模式：**外部系统通过 HTTP API 向指定"房间"广播消息，所有订阅该房间的 WebSocket 客户端实时收到**。多实例通过 Redis Channel Layer 共享状态，可水平扩展。
+一个基于 **Django + Django Channels** 的通用 WebSocket 实时消息推送服务模板。核心模式：**外部系统通过 HTTP API 向指定"房间"广播消息，所有订阅该房间的 WebSocket 客户端实时收到**。默认用内存 channel layer，单进程即可跑、不需要 Redis；多实例（`CHANNEL_LAYER_BACKEND=redis`）通过 Redis Channel Layer 共享状态，可水平扩展。
 
 - 作者：Xiang Wang <ramwin@qq.com>，MIT License
 - 无业务持久化模型（`generic/models.py`、`admin.py`、`tests.py` 均为空占位），Django 仅作为 ASGI/WebSocket 框架 + 管理后台 + 健康检查使用
@@ -18,7 +18,7 @@
 |------|------|
 | `django`（settings 头部注明基于 4.2.7 生成） | Web 框架 |
 | `channels[daphne]` | ASGI 服务与 WebSocket consumer，生产服务器为 Daphne |
-| `channels_redis` | Redis Channel Layer，跨实例广播 |
+| `channels_redis` | 可选依赖，仅 `CHANNEL_LAYER_BACKEND=redis` 时需要（**未列入** requirements.txt，需手动 `pip install channels_redis`） |
 | `djangorestframework` | `MessageView` 继承 `APIView` |
 | `django-health-check` | `/ht/` 健康检查端点 |
 | `django-split-settings` | `settings.py` 末尾 `include("logging_settings.py")` 拆分日志配置 |
@@ -27,13 +27,13 @@
 | `humanfriendly` | 健康检查中 `parse_size("1GiB")` |
 | `websocket-client`、`rel` | 测试脚本里的 WebSocket 客户端 |
 
-**注意**：`tests/` 下的脚本还依赖 `click` 和 `requests`，但二者**未列入** `requirements.txt`，运行测试前可能需要手动安装；`redis` 包由 `channels_redis` 传递引入（`settings.py` 和 `asgi.py` 直接 `from redis import Redis` 使用）。
+**注意**：`tests/` 下的脚本还依赖 `click` 和 `requests`，但二者**未列入** `requirements.txt`，运行测试前可能需要手动安装；`settings.py` 里 `from redis import Redis` 只在 `CHANNEL_LAYER_BACKEND=redis` 分支执行，默认的 memory 后端既不装也不需要 `redis` / `channels_redis` 包（`django-health-check` 对缺失的 `redis` 包会自行降级）。
 
 ## 三、目录结构
 
 ```
 project/                  # Django 项目包（配置层）
-  settings.py             # 主配置：CONFIG 加载、Redis 连通性检查、CHANNEL_LAYERS
+  settings.py             # 主配置：CONFIG 加载、CHANNEL_LAYER_BACKEND 分支（memory/redis）、CHANNEL_LAYERS
   asgi.py                 # ASGI 入口 + 自定义 MyAuthMiddleware + 路由组合
   urls.py                 # 总路由：admin/、ht/、ws/generic/
   logging_settings.py     # 日志配置（被 split_settings 引入，运行时写 log/ 目录）
@@ -45,7 +45,7 @@ generic/                  # 唯一业务应用
   views.py                # MessageView：HTTP 推送接口 + 调试 GET；RoomView：浏览器会话查看页面
   urls.py                 # HTTP 子路由：send-message/<slug:room_name>/、room/<room_name>/
   templates/generic/room.html  # 浏览器端会话查看页面（HTML + 内联 JS，参考 channels 官方教程 chat/room.html）
-  backends.py             # MyHealthCheck：自定义 Redis 内存健康检查
+  backends.py             # MyHealthCheck：自定义 Redis 内存健康检查（memory 后端下自动跳过）
   models.py/admin.py/tests.py  # 空占位
   migrations/             # 仅 __init__.py，无业务迁移
 
@@ -87,12 +87,13 @@ Client ──ws──► AllowedHostsOriginValidator ──► MyAuthMiddleware 
 HTTP POST /ws/generic/send-message/<room_name>/
   ──► generic/views.py MessageView.post
   ──► async_to_sync(channel_layer.group_send)(room_name, {"type": "message", "data": request.data})
-  ──► Redis Channel Layer 广播 ──► ChatConsumer.message() ──► send(text_data=...)
+  ──► CHANNEL_LAYERS 广播（默认 InMemoryChannelLayer；配置成 redis 则走 RedisChannelLayer）──► ChatConsumer.message() ──► send(text_data=...)
 ```
 
 - `MessageView.get` 是调试接口，返回启动命令、请求头、进程 PID。
 - 注意 URL 参数类型不一致：HTTP 路由用 `<slug:room_name>`（`generic/urls.py`），WS 路由用 `(?P<room_name>\w+)`（`generic/routing.py`）。房间名含连字符/点号等特殊字符时，两边匹配行为不同，修改路由时需同步考虑。
 - `project/urls.py` 只把 `generic.urls` 挂在 `/ws/generic/` 下，HTTP 推送和 WS 连接共用这一个前缀（历史上还有一个 `/ws/pair/` 前缀，已移除）。
+- 广播实际走 `CHANNEL_LAYERS`：默认 `channels.layers.InMemoryChannelLayer`（只在单进程内广播，不需要 redis），`CHANNEL_LAYER_BACKEND=redis` 时用 `channels_redis.core.RedisChannelLayer`，多实例才能共享广播。
 
 ### 浏览器端会话查看页面
 
@@ -122,16 +123,17 @@ HTTP POST /ws/generic/send-message/<room_name>/
 |------|--------|------|
 | `DEBUG` | settings.py | 值为字符串 `"True"` 才开启 |
 | `ALLOWED_HOSTS` | settings.py | 分号 `;` 分隔多个 host |
+| `CHANNEL_LAYER_BACKEND` | settings.py | channel layer 后端：`memory`（默认，单进程内广播，不需要 redis）或 `redis`（多实例共享广播，需要 redis 服务和 `channels_redis`）；其他值启动即报 `ImproperlyConfigured` |
 | `WEBSOCKET_REDIS_HOST` / `WEBSOCKET_REDIS_PORT` | settings.py | 默认 `localhost:6379`；compose 中指向 `redis` 服务 |
 | `BASE_URL` / `BASE_WSS_URL` | tests/ 脚本 | HTTP / WS 测试目标地址（见 `.env.shared`） |
 | compose 专用 | docker-compose.yml | `WEBSOCKET_PORT`（默认 7420）、`WEBSOCKET_INTERNAL_PORT`（默认 7419）、`DOCKER_NETWORK_NAME`、`*_CONTAINER_NAME`，示例见 `.env.compose.example` |
 
-**Redis 是启动强依赖**：`settings.py` 在**导入期**就创建 Redis 连接并执行 `REDIS.get('foo')`，连不上直接抛异常终止启动。跑任何 manage.py 命令前都必须先起 Redis。
+**Redis 默认不再是启动依赖**：只有 `CHANNEL_LAYER_BACKEND=redis` 时，`settings.py` 才在**导入期**创建 Redis 连接并执行 `REDIS.get('foo')`，连不上直接抛异常终止启动；此时才会有 `settings.REDIS`（`generic/backends.py` 的 Redis 内存健康检查据此判断是否跳过）。默认的 memory 后端全程不碰 redis。
 
 其他配置要点：
 
 - `INSTALLED_APPS` 中 `daphne` 必须排第一（Channels 要求，保证开发 runserver 也走 ASGI）。
-- `CHANNEL_LAYERS` 使用 `channels_redis.core.RedisChannelLayer`。
+- `CHANNEL_LAYERS` 由 `CHANNEL_LAYER_BACKEND` 决定：`memory` → `channels.layers.InMemoryChannelLayer`，`redis` → `channels_redis.core.RedisChannelLayer`。用 memory 时启动日志会打一条 WARNING 提醒只支持单进程。
 - 日志由 `logging_settings.py` 配置：按级别轮转写 `log/debug.log`、`info.log`、`warning.log`、`error.log`，控制台用 colorlog；通过 `manage.py <命令>` 运行时额外写 `log/<命令>/info.log`。**`log/` 目录必须可写**（缺失时自动创建）。
 
 ## 六、构建、运行与测试命令
@@ -140,7 +142,7 @@ HTTP POST /ws/generic/send-message/<room_name>/
 # 安装依赖（建议虚拟环境）
 pip install -r requirements.txt
 
-# 前置：Redis 已启动且可连通（settings 导入即检查）
+# 前置：默认不需要 redis；只有 CHANNEL_LAYER_BACKEND=redis 时才要求 Redis 已启动且可连通（settings 导入即检查）
 
 # 初始化数据库（auth/session/admin 迁移需要）
 python manage.py migrate
@@ -162,7 +164,7 @@ python tests/test_receive_message.py --room room_123 --auth token123   # WS 订�
 ## 七、部署
 
 - **Docker**：`Dockerfile` 基于官方 `python` 镜像，pip 走清华镜像源，最终 `CMD python -m daphne -b 0.0.0.0 -p 7419 project.asgi:application`（暴露 7419）。`docker-compose.yml` 起 `redis:7-alpine` + 应用两个服务，宿主机端口默认 `7420→7419`。`docker/test_run_docker.sh` 演示了纯 docker run 的手动编排（redis 容器 + 同网络应用容器，用 `-e WEBSOCKET_REDIS_HOST=redis` 注入）。
-- **裸机多实例**：`deploy/supervisor.conf` 用 supervisor 管 3 个 Daphne 实例（57420-57422，user `websocket`）；`deploy/nginx/websocket.ramwin.com` 示例按房间名前缀/后缀（`room_[a-z]`→57420、`room_[A-Z]`→57421、`room_[0-9]`→57422、`user_...` 尾号→7430/7431）把连接和 HTTP 推送分流到不同后端，WebSocket location 带 `Upgrade` 头转发。多实例广播一致性依赖 Redis Channel Layer，而非 Nginx 的 ip_hash 之类的会话保持。
+- **裸机多实例**：`deploy/supervisor.conf` 用 supervisor 管 3 个 Daphne 实例（57420-57422，user `websocket`）；`deploy/nginx/websocket.ramwin.com` 示例按房间名前缀/后缀（`room_[a-z]`→57420、`room_[A-Z]`→57421、`room_[0-9]`→57422、`user_...` 尾号→7430/7431）把连接和 HTTP 推送分流到不同后端，WebSocket location 带 `Upgrade` 头转发。多实例广播一致性依赖 Redis Channel Layer，而非 Nginx 的 ip_hash 之类的会话保持——所以这套部署必须设置 `CHANNEL_LAYER_BACKEND=redis` 并安装 `channels_redis`（默认的 memory 后端只在单进程内广播，实例之间收不到消息）。Docker 单容器用默认的 memory 即可，compose 里的 `redis` 服务只有在切到 redis 后端时才需要。
 
 ## 八、代码风格约定
 
@@ -178,7 +180,7 @@ python tests/test_receive_message.py --room room_123 --auth token123   # WS 订�
 - `asgi.py` 的 `MyAuthMiddleware` 是**演示级**鉴权（硬编码 token），接入真实系统前必须重写 `get_user()`（代码内 TODO 也指出了这一点）。
 - `MessageView.post` **无任何认证/权限校验**，任何能访问该 URL 的人都能向任意房间广播；暴露在公网前必须自行加鉴权或在网关层限制。
 - `ChatConsumer.need_auth` 当前为 `False`，未认证连接不会被拒绝。
-- Redis 无密码、无 TLS 配置，仅适合内网部署。
+- 使用 redis channel layer（`CHANNEL_LAYER_BACKEND=redis`）时，Redis 无密码、无 TLS 配置，仅适合内网部署。
 - `.env` 已被 `.gitignore` 忽略（勿提交真实环境变量）；`Dockerfile` 的 `COPY ./ ./` 会把本地 `.env` 打进镜像，构建生产镜像前注意清理。
 
 ## 十、二次开发常见修改点

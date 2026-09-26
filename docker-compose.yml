@@ -21,6 +21,9 @@ services:
     ports:
       - "${WEBSOCKET_PORT:-7420}:${WEBSOCKET_INTERNAL_PORT:-7419}"
     environment:
+      # 注意：.env / .env.shared 的优先级高于这里的 environment，
+      # 容器用 memory 还是 redis channel layer 由镜像里的 .env.shared（或 .env）决定。
+      # 单容器（memory）其实不需要下面的 redis 服务，多实例共享广播时才需要。
       - WEBSOCKET_REDIS_HOST=${WEBSOCKET_REDIS_HOST:-redis}
       - WEBSOCKET_REDIS_PORT=${WEBSOCKET_REDIS_PORT:-6379}
       - DEBUG=${DEBUG:-False}

@@ -4,11 +4,31 @@ a generic websocket
 
 # Install
 ```bash
-# install redis server
+# 默认使用内存 channel layer，不需要 redis server
 git clone git@github.com:ramwin/django-generic-websocket-project.git
 cd django-generic-websocket-project
 pip3 install -r ./requirements.txt
 ```
+
+# channel layer（默认不需要 redis）
+默认 `CHANNEL_LAYER_BACKEND=memory`（见 `.env.shared`），消息在**当前进程内**广播：
+不需要 redis 服务，也不需要 `channels_redis`，`python3 manage.py runserver 7420` 直接就能跑。
+
+多实例部署（`deploy/supervisor.conf` 的 3 个 daphne、docker compose 扩副本）**必须**换成 redis，
+否则实例 A 推送的消息，连在实例 B 上的客户端收不到：
+```bash
+# .env 或 .env.shared（.env 优先级更高）
+CHANNEL_LAYER_BACKEND=redis
+WEBSOCKET_REDIS_HOST=localhost
+WEBSOCKET_REDIS_PORT=6379
+```
+```bash
+pip3 install channels_redis   # 需要同时安装这个包
+```
+其他说明：
+- 启动了 memory 后端时，服务启动日志里会有一条 WARNING 提醒单进程限制
+- 配置值只能是 `memory` 或 `redis`，写错了启动时会直接报 `ImproperlyConfigured`
+- 项目里 `.env` / `.env.shared` 的优先级**高于**进程环境变量，Docker 的 `environment` 覆盖不生效
 
 # Usage
 ```
@@ -58,3 +78,4 @@ daphne -b <example.com> -p <port> wsbackend.asgi:application
 # load balance
 1. use `deploy/supervisor.conf` to run multi instance
 2. use `deploy/nginx/websocket.ramwin.com` to loadbalance
+3. 多实例必须设置 `CHANNEL_LAYER_BACKEND=redis` 并安装 `channels_redis`，否则跨实例收不到消息

@@ -1,6 +1,7 @@
 django
 channels[daphne]
-channels_redis
+# 只有 CHANNEL_LAYER_BACKEND=redis 时才需要：pip install channels_redis
+# channels_redis
 websocket-client
 rel
 setuptools

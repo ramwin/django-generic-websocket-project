@@ -14,9 +14,12 @@ from health_check.exceptions import ServiceUnavailable
 
 @dataclasses.dataclass
 class MyHealthCheck(HealthCheck):
-    """自定义健康检查：监控 Redis 内存使用。"""
+    """自定义健康检查：监控 Redis 内存使用（仅在 redis channel layer 下生效）。"""
 
     async def run(self) -> None:
+        # 用内存 channel layer 时 settings 里没有 REDIS，跳过这个检查
+        if not hasattr(settings, "REDIS"):
+            return
         for key in ["used_memory_rss", "used_memory"]:
             if settings.REDIS.info("memory")[key] > parse_size("1GiB"):
                 raise ServiceUnavailable(f"{settings.REDIS} 内存过大")

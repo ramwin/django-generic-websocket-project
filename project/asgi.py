@@ -12,8 +12,6 @@ import os
 from typing import Union
 from urllib.parse import parse_qs
 
-from redis import Redis
-
 from django.core.asgi import get_asgi_application
 from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
@@ -23,7 +21,6 @@ from generic.routing import websocket_urlpatterns
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "project.settings")
 django_asgi_app = get_asgi_application()
-REDIS = Redis(decode_responses=True)
 LOGGER = logging.getLogger("generic")
 
 
