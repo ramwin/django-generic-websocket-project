@@ -1,18 +1,18 @@
 /**
- * 「AI 给出反馈后，留 3 秒给人类打断」的语义。
+ * 「AI 给出反馈后，留一段时间给人类打断」的语义。
  *
- * 实现上只有一个技巧：**这 3 秒就是一次带 roles 过滤的长轮询**。
+ * 实现上只有一个技巧：**这段等待就是带 roles 过滤的长轮询**。
  * 工具调用的时候 AI 回合本来就是开着等结果的，所以
  *
- *     等 3 秒看有没有人打断
+ *     等 N 秒看有没有人打断
  *
  * 就是一次 `GET /messages?after=N&wait=3&roles=interrupt,resume,suggest`：
- * 有人打断就立刻返回，没人打断就在 3 秒后超时返回。不需要定时器、
+ * 有人打断就立刻返回，没人打断就等到点超时。不需要定时器、
  * 不需要外部调度器、不需要插件自己维护状态机。
  *
  * 阶段划分：
  *
- *   阶段 1（humanWindowMs，默认 3 秒）
+ *   阶段 1（humanWindowMs，默认 10 秒）
  *     人类点「打断」 -> 进入阶段 2
  *     人类点「恢复」 -> 直接继续循环
  *     人类点「加入建议」 -> 带着建议继续循环
@@ -130,7 +130,7 @@ export async function waitForHumanAction({
  * @param {object} options 参数。
  * @param {object} options.bus 会议室客户端（有 postMessage/getMessages 即可，便于测试）。
  * @param {string} options.sessionId 会话 ID。
- * @param {number} [options.windowMs] 阶段 1 时长，默认 3000。
+ * @param {number} [options.windowMs] 阶段 1 时长，默认 10000。
  * @param {number} [options.waitMs] 阶段 2 时长，默认 600000。
  * @param {number} [options.targetSeq] 这次窗口针对哪一轮产物。
  * @param {string} [options.reason] 窗口开启时展示给人类的说明。
@@ -143,7 +143,7 @@ export async function waitForHumanAction({
 export async function openHumanWindow({
     bus,
     sessionId,
-    windowMs = 3000,
+    windowMs = 10_000,
     waitMs = 600_000,
     targetSeq = 0,
     reason = '',
@@ -174,7 +174,7 @@ export async function openHumanWindow({
             await bus.postMessage(sessionId, {
                 sender: 'system',
                 role: 'human_window_close',
-                content: describeOutcome(outcome),
+                content: describeOutcome(outcome, seconds),
                 payload: { outcome, target_seq: targetSeq, ...extra },
             });
         } catch {
@@ -184,7 +184,7 @@ export async function openHumanWindow({
 
     /** 推进两个阶段，返回 {outcome, extra, result}。 */
     const runPhases = async () => {
-        // ---- 阶段 1：3 秒窗口 ----
+        // ---- 阶段 1：打断窗口 ----
         const during = await waitForHumanAction({
             bus,
             sessionId,
@@ -200,7 +200,7 @@ export async function openHumanWindow({
 
         if (action === undefined) {
             // 竞态兜底：页面上的倒计时是从「收到广播」那一刻开始算的，和服务端
-            // 的 3 秒窗口存在毫秒级偏差。窗口刚过期这一瞬间到达的打断不能丢，
+            // 的窗口存在毫秒级偏差。窗口刚过期这一瞬间到达的打断不能丢，
             // 否则用户会看到界面进入「已暂停」，而循环其实已经往下走了。
             // 这里补一次不等待的查询，代价是一次 HTTP 请求。
             const sweep = await bus.getMessages(sessionId, {
@@ -340,11 +340,18 @@ export function dedupeNotes(notes) {
     return unique;
 }
 
-/** 给人类看的结果说明。 */
-export function describeOutcome(outcome) {
+/**
+ * 给人类看的结果说明。
+ *
+ * @param {string} outcome 结果。
+ * @param {number} [seconds] 窗口时长（秒），用来把文案说得跟配置一致。
+ * @returns {string} 说明。
+ */
+export function describeOutcome(outcome, seconds) {
+    const span = Number.isFinite(seconds) ? `${seconds} 秒` : '窗口';
     switch (outcome) {
         case 'timeout':
-            return '3 秒内没有人打断，循环自动继续。';
+            return `${span}内没有人打断，循环自动继续。`;
         case 'resumed':
             return '人类选择恢复循环。';
         case 'suggested':

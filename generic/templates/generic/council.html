@@ -6,7 +6,7 @@ AI 会议室（council）页面 —— 人类参与那个环节。
 页面做四件事：
     1. 用 WebSocket 订阅房间 /ws/generic/<session_id>/ ，实时看到
        DeepSeek / Kimi / Claude 的每一步（计划、编码、执行、评价、评审）；
-    2. 模型给完意见后，屏幕下方会弹出 3 秒倒计时条 —— 这几秒里你可以
+    2. 模型给完意见后，屏幕下方会弹出倒计时条 —— 这几秒里你可以
        点「打断」把循环停下来慢慢看；
     3. 打断之后你可以选「恢复循环」或者「加入我的建议」；
     4. 也可以随时在底部输入框里留言，广播给所有参与者。
@@ -59,7 +59,7 @@ AI 会议室（council）页面 —— 人类参与那个环节。
         .chip.role { background: #dbeafe; color: #1d4ed8; }
         .chip.step { background: #ede9fe; color: #5b21b6; }
 
-        /* 3 秒人工打断窗口 */
+        /* 人工打断窗口 */
         #interrupt-bar {
             display: none; padding: 12px; border-radius: 10px;
             border: 2px solid #f59e0b; background: #fffbeb;
@@ -171,6 +171,7 @@ AI 会议室（council）页面 —— 人类参与那个环节。
             let windowTimer = null;
             let windowState = "idle";        // idle | waiting | paused
             let windowOpen = false;          // 倒计时是否正在跑
+            let windowSeconds = 10;          // 本次窗口时长（秒），由服务端的 deadline_ms 推出来
             let lastInterruptAt = 0;         // 我刚点过打断的时刻，用来忽略自己那条广播
             const seenSeq = new Set();
 
@@ -269,12 +270,13 @@ AI 会议室（council）页面 —— 人类参与那个环节。
                 appendMessage({ sender: "system", role: "system", content: text });
             }
 
-            // ---------- 3 秒人工打断窗口 ----------
+            // ---------- 人工打断窗口 ----------
 
             // 「窗口开着、倒计时在跑」和「循环已暂停」是两个独立状态：
             // 窗口关了不等于暂停面板要收起（打断后关窗时正相反）。
             function openHumanWindow(event) {
-                const deadlineMs = Number((event.payload && event.payload.deadline_ms) || 3000);
+                const deadlineMs = Number((event.payload && event.payload.deadline_ms) || 10000);
+                windowSeconds = Math.max(1, Math.round(deadlineMs / 1000));
                 // 用**服务端**的时间戳算截止时刻，而不是「页面收到的时刻」。
                 // 否则页面显示的剩余时间会比服务端真实窗口更长，用户会以为
                 // 自己还能打断，其实循环已经往下走了。
@@ -303,7 +305,7 @@ AI 会议室（council）页面 —— 人类参与那个环节。
                         windowState = "idle";
                         bar.className = "";
                         barWaiting.style.display = "none";
-                        appendNotice("3 秒内没有人打断，循环已自动继续。");
+                        appendNotice(windowSeconds + " 秒内没有人打断，循环已自动继续。");
                     }
                 }, 100);
             }
@@ -354,7 +356,7 @@ AI 会议室（council）页面 —— 人类参与那个环节。
                         // 打断来晚了（不是我自己刚点的）：服务端这一轮已经自动继续。
                         // 绝不能假装循环停了，否则用户会一直等一个并不存在的暂停。
                         appendNotice("你的打断来晚了 —— 这一轮已经自动继续。"
-                            + "下一轮的 3 秒窗口会重新给你。");
+                            + "下一轮的 " + windowSeconds + " 秒窗口会重新给你。");
                     }
                 }
                 else if (event.role === "resume" || event.role === "suggest") {
@@ -436,7 +438,7 @@ AI 会议室（council）页面 —— 人类参与那个环节。
                     // 竞态兜底窗口内、最终返回 paused，稍后的关闭事件也会把
                     // 暂停面板补上 —— 宁可先少承诺，不要先假装停了。
                     appendNotice("你的打断来晚了 —— 这一轮已经自动继续；"
-                        + "下一轮的 3 秒窗口会重新给你。");
+                        + "下一轮的 " + windowSeconds + " 秒窗口会重新给你。");
                     windowState = "idle";
                     bar.className = "";
                     barWaiting.style.display = "none";

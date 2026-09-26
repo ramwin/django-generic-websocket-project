@@ -365,3 +365,26 @@ test('非会议室格式的消息（项目原有推送）不会让页面崩', ()
     page.pushRaw({ message: 'hello' });
     assert.match(page.logText(), /hello/);
 });
+
+test('倒计时文案跟着 deadline_ms 走，不是写死的 3 秒', () => {
+    // 窗口时长是可配的（默认已从 3 秒改成 10 秒）。页面文案必须跟着来，
+    // 否则用户看到的数字和实际行为对不上。
+    const tenSeconds = makePage();
+    tenSeconds.push({ ...WINDOW_OPEN, payload: { deadline_ms: 10000, target_seq: 1 } });
+    tenSeconds.advance(10500);
+    assert.match(tenSeconds.logText(), /10 秒内没有人打断/);
+    assert.doesNotMatch(tenSeconds.logText(), /3 秒内没有人打断/);
+
+    const threeSeconds = makePage();
+    threeSeconds.push({ ...WINDOW_OPEN, payload: { deadline_ms: 3000, target_seq: 1 } });
+    threeSeconds.advance(3500);
+    assert.match(threeSeconds.logText(), /3 秒内没有人打断/);
+});
+
+test('打断来晚了的提示也用实际窗口秒数', async () => {
+    const page = makePage();
+    page.push({ ...WINDOW_OPEN, payload: { deadline_ms: 10000, target_seq: 1 } });
+    page.advance(10500);
+    await page.click('btn-interrupt');
+    assert.match(page.logText(), /10 秒窗口会重新给你/);
+});

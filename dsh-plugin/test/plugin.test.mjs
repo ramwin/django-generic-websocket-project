@@ -66,7 +66,10 @@ test('随包发布的 cordis.patch.yml 能通过 Config 校验', () => {
     const config = shippedConfig();
     const validated = Config(config);
     assert.equal(validated.busUrl, 'http://127.0.0.1:7420');
-    assert.equal(validated.humanWindowMs, 3000, '默认就是 3 秒');
+    // 不写死：窗口时长可配（3 秒对真人太紧，已改成 10 秒）
+    assert.equal(validated.humanWindowMs, 10_000, '随包默认是 10 秒');
+    assert.ok(validated.pollWindowMs < 60_000,
+        'pollWindowMs 必须小于服务端的 MAX_WAIT_SECONDS，否则会被静默截断');
     assert.equal(validated.participants.kimi.adapter, 'kimi-cli');
     assert.equal(validated.participants.claude.adapter, 'claude-api');
 });
@@ -169,4 +172,26 @@ test('lib/ 下的源码全部入库了（防止被 .gitignore 静默吃掉）', 
         tracked.sort(),
         onDisk.sort(),
         'dsh-plugin/lib 下有文件没入库 —— 别人 clone 下来的插件会缺代码');
+});
+
+test('提示词和工具描述里的窗口时长跟着配置走，不是写死的', () => {
+    // 真实教训：窗口从 3 秒改成 10 秒时，如果文案还写死「3 秒」，
+    // 模型和用户都会被误导。这里用两份不同配置各渲染一次来钉住。
+    const render = rawConfig => {
+        const { ctx, sections, registered } = makeCtx();
+        apply(ctx, Config(rawConfig));
+        return {
+            prompt: sections[0].text({}),
+            toolText: registered.map(tool => `${tool.name} ${tool.description}`).join('\n'),
+        };
+    };
+    const base = shippedConfig();
+    const ten = render({ ...base, humanWindowMs: 10_000 });
+    assert.match(ten.prompt, /10 秒/);
+    assert.doesNotMatch(ten.prompt, /3 秒/);
+    assert.match(ten.toolText, /10 秒/);
+
+    const three = render({ ...base, humanWindowMs: 3000 });
+    assert.match(three.prompt, /3 秒/);
+    assert.match(three.toolText, /3 秒/);
 });

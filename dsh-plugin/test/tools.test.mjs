@@ -387,12 +387,12 @@ test('renderReviewResult 把「要改谁」「人类说了什么」放在显眼�
             { label: 'Claude', verdict: 'approve', summary: 'Claude：同意｜没问题', text: '没问题' },
             { label: 'Strict', verdict: 'revise', summary: 'Strict：要改｜会死锁', text: '会死锁\nVERDICT: revise' },
         ],
-        human: { status: 'timeout', notes: ['我在看'] },
+        human: { status: 'timeout', window_ms: 10_000, notes: ['我在看'] },
         page_url: 'http://h/p/',
     });
     assert.match(text, /第 2 轮/);
     assert.match(text, /需要改：Strict/);
     assert.match(text, /会死锁/);
-    assert.match(text, /3 秒内没有人打断/);
+    assert.match(text, /10 秒内没有人打断/);
     assert.match(text, /我在看/);
 });

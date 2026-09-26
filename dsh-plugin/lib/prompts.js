@@ -20,7 +20,7 @@ const ROLE_LABELS = {
     interrupt: '人类打断',
     resume: '人类选择恢复循环',
     suggest: '人类建议',
-    human_window_open: '等待人工确认（3 秒窗口开启）',
+    human_window_open: '等待人工确认（人工窗口开启）',
     human_window_close: '人工窗口关闭',
     system: '系统事件',
 };

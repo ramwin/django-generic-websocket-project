@@ -5,7 +5,7 @@
  *
  *   1. **DeepSeek（你）** 负责计划 / 编码 / 执行 / 评价，并且是唯一改文件的人；
  *   2. **外部异模型**（Kimi、Claude…）在每一步给出评审，可以要求返工；
- *   3. **人类** 通过 3 秒打断窗口随时插手，选择继续、或者注入自己的建议。
+ *   3. **人类** 通过打断窗口（默认 10 秒，可配）随时插手，选择继续或注入建议。
  *
  * 三方的所有发言都通过 django-generic-websocket-project 的 HTTP + WebSocket
  * 广播落进同一个房间，所以那是个真正共享的通道，而不是两两私聊。
@@ -59,7 +59,7 @@ const participantConfig = z.object({
 /** 插件配置。 */
 export const Config = z.object({
     busUrl: z.string().default('http://127.0.0.1:7420'),
-    humanWindowMs: z.natural().default(3000),
+    humanWindowMs: z.natural().default(10_000),
     humanWaitMs: z.natural().default(600_000),
     pollWindowMs: z.natural().default(55_000),
     reviewTimeoutMs: z.natural().default(180_000),
@@ -89,6 +89,7 @@ export function apply(ctx, config) {
         order: resolved.promptSectionOrder,
         text: () => usageSectionText({
             toolNames: COUNCIL_TOOL_NAMES,
+            humanWindowSeconds: Math.round(resolved.humanWindowMs / 1000),
             participants: enabled,
             pageHint: '会议室服务默认地址是 '
                 + `${resolved.busUrl}（django-generic-websocket-project）。`

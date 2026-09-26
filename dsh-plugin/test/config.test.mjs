@@ -22,7 +22,9 @@ test('默认就带上了 kimi 和 claude 两个异模型', () => {
     assert.deepEqual(Object.keys(config.participants).sort(), ['claude', 'kimi']);
     assert.equal(config.participants.kimi.adapter, 'kimi-cli');
     assert.equal(config.participants.claude.adapter, 'claude-api');
-    assert.equal(config.humanWindowMs, 3000);
+    // 不写死数字：窗口时长是可配的（3 秒对真人太紧，已改成 10 秒）
+    assert.equal(config.humanWindowMs, DEFAULTS.humanWindowMs);
+    assert.ok(config.humanWindowMs >= 5000, '窗口不该短到人来不及反应');
 });
 
 test('用户配置逐字段覆盖默认值', () => {

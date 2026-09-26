@@ -51,7 +51,7 @@ generic/                  # 唯一业务应用
   council.py              # AI 会议室服务层：分配 seq、落库、复用 channel layer 广播、长轮询
   council_views.py        # AI 会议室 HTTP 接口 + 人类动作接口 + 会议室页面视图
   council_urls.py         # AI 会议室路由，挂在 /ws/generic/council/ 下
-  templates/generic/council.html  # AI 会议室页面：消息流 + 3 秒人工打断条
+  templates/generic/council.html  # AI 会议室页面：消息流 + 人工打断条（时长可配，默认 10 秒）
   tests.py                # 30 项单元测试：会议室接口 + 原有 HTTP/WS 能力回归
   admin.py                # 空占位
   migrations/             # 0001_initial.py：会议室两张表
@@ -61,20 +61,21 @@ tests/                    # 端到端冒烟测试脚本（CLI 工具，非单元
   test_receive_message.py # click CLI：WebSocket 客户端订阅房间
   council_smoke.py        # click CLI：AI 会议室全链路冒烟（含并发 seq 校验）
   council_multiprocess_smoke.sh  # 多实例 + redis channel layer 冒烟（生产部署形态）
-  council_page.test.mjs   # 会议室页面内联 JS 的测试（最小 DOM 桩，13 项）
+  council_page.test.mjs   # 会议室页面内联 JS 的测试（最小 DOM 桩，15 项）
 
 dsh-plugin/               # DeepSeek Harness 插件：AI Council（见 dsh-plugin/README.md）
   package.json            # 插件包声明，dsh.bundle.patch 指向 cordis.patch.yml
   cordis.patch.yml        # 把插件挂进 profile 的 host 组合（含默认配置）
   lib/                    # 纯 ESM，无构建步骤；只有 index.js/tools.js 依赖 DSH
-  test/                   # 88 项单元测试，node --test，不需要 DSH
+  test/                   # 109 项单元测试，node --test，不需要 DSH
   scripts/verify-dsh-mount.sh  # 验证 DSH 能否装载本插件（一次性 DSH home，可重复跑）
-  scripts/e2e-demo.mjs    # 端到端演示：真服务 + 真 3 秒 + 真 Kimi
+  scripts/e2e-demo.mjs    # 端到端演示：真服务 + 真窗口 + 真 Kimi
   scripts/live-check.mjs  # 链路自检：插件 ↔ 真实服务（模型换成桩，不耗额度）
 
 deploy/
   supervisor.conf         # 3 个 Daphne 实例（端口 57420/57421/57422）
   nginx/websocket.ramwin.com  # Nginx 按房间名前缀/后缀分流 + WebSocket 代理示例
+  council_service.sh      # AI 会议室服务的常驻启停脚本（幂等；start 会汇报活跃会议室）
 
 docker/                   # docker_build.sh / docker_run.sh / test_run_docker.sh
 Dockerfile / docker-compose.yml
@@ -140,7 +141,7 @@ HTTP POST /ws/generic/send-message/<room_name>/
 Kimi / Claude（异模型）、人类三方把发言都投进同一个房间。
 
 **一句话设计**：会议室里的一切都是消息。没有额外的状态机——「人类打断」
-就是一条 `role="interrupt"` 的消息，「3 秒窗口关闭」就是一条
+就是一条 `role="interrupt"` 的消息，「人工窗口关闭」就是一条
 `role="human_window_close"` 的消息。这样它既能被 WebSocket 实时推送，
 也能被 HTTP 长轮询可靠取回，还能完整回放。
 
@@ -148,7 +149,7 @@ Kimi / Claude（异模型）、人类三方把发言都投进同一个房间。
 POST /ws/generic/council/sessions/<sid>/messages/   ← 发言（模型/系统）
 POST /ws/generic/council/sessions/<sid>/human/      ← 人类动作：interrupt/resume/suggest/note
 GET  /ws/generic/council/sessions/<sid>/messages/   ← 拉增量，支持 ?after=&wait=&roles= 长轮询
-GET  /ws/generic/council/room/<sid>/                ← 会议室页面（含 3 秒打断条）
+GET  /ws/generic/council/room/<sid>/                ← 会议室页面（含人工打断条）
         │
         └─► council.broadcast() ──► channel_layer.group_send(sid, ...) ──► ChatConsumer ──► 页面 / 插件
 ```
@@ -160,9 +161,11 @@ GET  /ws/generic/council/room/<sid>/                ← 会议室页面（含 3 
   （见 `council.post_message`）。
 - 会议室消息复用**原有**的 `channel_layer.group_send` 原语，所以 `CHANNEL_LAYER_BACKEND=redis`
   的多实例部署、原有 `room.html`、原有 `ChatConsumer` 全都不受影响。
-- 「3 秒人工打断窗口」的实现只有一个技巧：插件侧用一次
-  `GET ...?after=N&wait=3&roles=interrupt,resume,suggest` 的长轮询等这 3 秒。
-  有人打断就立刻返回，没人打断就超时返回。**不需要定时器，也不需要外部调度器。**
+- 「人工打断窗口」的实现只有一个技巧：插件侧用 `GET ...?after=N&wait=W&roles=interrupt,resume,suggest`
+  **循环**长轮询等这段时间（`humanWindowMs`，默认 10 秒）。有人打断就立刻返回，没人打断就等到点。
+  **不需要定时器，也不需要外部调度器。**
+  注意服务端 `MAX_WAIT_SECONDS = 60` 是硬上限、会静默截断，所以单次请求走
+  `pollWindowMs`（默认 55 秒）、由客户端循环到自己的 deadline。
 - 房间名约束在 `council_views.SESSION_ID_PATTERN` 与会话创建校验里都做了，
   自定义 `session_id` 必须满足 `\w+`。
 
@@ -217,12 +220,12 @@ python tests/test_receive_message.py --room room_123 --auth token123   # WS 订�
 
 - `generic/tests.py` 是 Django 单元测试（30 项）：覆盖 AI 会议室接口、广播落组、路由，以及**原有 HTTP/WS 能力的回归**（原来的推送接口、房间页、`ChatConsumer` 收发、WS 路由正则）。跑法：`python manage.py test generic`。
 - `tests/` 目录是人工跑的端到端 CLI 脚本（依赖 click/requests/websocket-client），其中 receive 脚本支持 `data.action == "raise"` 时主动抛错以模拟客户端异常。`council_smoke.py` 是 AI 会议室的全链路冒烟（23 项，含**并发发言下 seq 不重号不漏号**），需要先起服务：`python tests/council_smoke.py --base-url http://localhost:7420`。
-- `tests/council_page.test.mjs` 是**会议室页面里那段内联 JS** 的测试（13 项）：用一个手写的最小 DOM 桩加载模板里真实的脚本，由测试驱动时间，覆盖 3 秒打断条的状态机（倒计时、窗口过期不误弹、打断来晚了不能假装循环停了、服务端关窗后暂停面板的去留）。**不引入 jsdom**，跑法：`node --test tests/council_page.test.mjs`。
+- `tests/council_page.test.mjs` 是**会议室页面里那段内联 JS** 的测试（15 项）：用一个手写的最小 DOM 桩加载模板里真实的脚本，由测试驱动时间，覆盖人工打断条的状态机（倒计时、窗口过期不误弹、打断来晚了不能假装循环停了、服务端关窗后暂停面板的去留）。**不引入 jsdom**，跑法：`node --test tests/council_page.test.mjs`。
 - `tests/council_multiprocess_smoke.sh` 验**生产部署形态**（9 项）：切到 `CHANNEL_LAYER_BACKEND=redis`、同时起两个 Daphne 实例共享同一个 sqlite，然后检查跨实例广播（WS 连 A、HTTP 打到 B 要能收到）、跨进程并发写 sqlite 不报 `database is locked`、多进程下 seq 仍唯一连续。**这一点很重要**：改动之前这个项目运行期几乎不写库，而会议室每句话都要写，是**新引入**的并发面。需要本机有 redis，没有就跳过。脚本把 settings 覆盖写在临时目录里，**不动仓库文件**。
-- `dsh-plugin/test/` 是插件的单元测试（88 项），用假会议室 + 假模型，**不需要 DSH 也不需要网络**，跑法：`cd dsh-plugin && node --test test/`。其中 `test/output-contract.test.mjs` 用 **DSH 自己的 `validateJsonSchemaValue`** 校验每个工具在每个分支上的真实返回值——因为 DSH 管道会按 `output.schema` 校验工具输出，而直接调 `execute` 是绕过校验的，「本地全绿、装进 DSH 就炸」就是这样来的。
+- `dsh-plugin/test/` 是插件的单元测试（109 项），用假会议室 + 假模型，**不需要 DSH 也不需要网络**，跑法：`cd dsh-plugin && node --test test/`。其中 `test/output-contract.test.mjs` 用 **DSH 自己的 `validateJsonSchemaValue`** 校验每个工具在每个分支上的真实返回值——因为 DSH 管道会按 `output.schema` 校验工具输出，而直接调 `execute` 是绕过校验的，「本地全绿、装进 DSH 就炸」就是这样来的。
 - `dsh-plugin/scripts/live-check.mjs` 是**插件 ↔ 真实会议室服务**的链路自检（17 项，模型换成桩、不消耗任何额度），需要先起服务：`node dsh-plugin/scripts/live-check.mjs --bus-url http://localhost:7420`。
 - `dsh-plugin/scripts/verify-dsh-mount.sh` 验证 **DSH 能不能装载这个插件**（9 项）：靠 `DSH_HOME` 指向临时目录造一个一次性 DSH home，从 shipped 模板建 profile、把插件挂成 bundle，再逐个检查 `--dump-config`（组合器认不认）、`--dump-config-schema`（能不能导入模块读 schema）、`--help`（profile 能不能启动，即 `apply()` 会不会抛）。**不会碰用户自己的 `~/.dsh`。**
-- `dsh-plugin/scripts/e2e-demo.mjs` 是插件侧的端到端演示（真服务 + 真 3 秒 + 真 Kimi）。
+- `dsh-plugin/scripts/e2e-demo.mjs` 是插件侧的端到端演示（真服务 + 真窗口 + 真 Kimi）。
 
 仓库里存在 `.mypy_cache`，说明用 mypy 做过类型检查，但无配置文件、未纳入标准流程。改动后请至少跑通上述流程验证。
 
@@ -230,6 +233,28 @@ python tests/test_receive_message.py --room room_123 --auth token123   # WS 订�
 
 - **Docker**：`Dockerfile` 基于官方 `python` 镜像，pip 走清华镜像源，最终 `CMD python -m daphne -b 0.0.0.0 -p 7419 project.asgi:application`（暴露 7419）。`docker-compose.yml` 起 `redis:7-alpine` + 应用两个服务，宿主机端口默认 `7420→7419`。`docker/test_run_docker.sh` 演示了纯 docker run 的手动编排（redis 容器 + 同网络应用容器，用 `-e WEBSOCKET_REDIS_HOST=redis` 注入）。
 - **裸机多实例**：`deploy/supervisor.conf` 用 supervisor 管 3 个 Daphne 实例（57420-57422，user `websocket`）；`deploy/nginx/websocket.ramwin.com` 示例按房间名前缀/后缀（`room_[a-z]`→57420、`room_[A-Z]`→57421、`room_[0-9]`→57422、`user_...` 尾号→7430/7431）把连接和 HTTP 推送分流到不同后端，WebSocket location 带 `Upgrade` 头转发。多实例广播一致性依赖 Redis Channel Layer，而非 Nginx 的 ip_hash 之类的会话保持——所以这套部署必须设置 `CHANNEL_LAYER_BACKEND=redis` 并安装 `channels_redis`（默认的 memory 后端只在单进程内广播，实例之间收不到消息）。Docker 单容器用默认的 memory 即可，compose 里的 `redis` 服务只有在切到 redis 后端时才需要。
+
+### 把会议室服务当常驻服务跑
+
+`deploy/council_service.sh` 用 `setsid` 把 daphne 脱离会话启动，所以关终端、
+重启 dsh 都不会带走它。**幂等**是它的核心：`start` 先探活，已经在跑就什么都不做、
+并直接告诉你当前活跃的会议室是哪个。
+
+```bash
+deploy/council_service.sh start          # 幂等启动；已在跑就复用
+deploy/council_service.sh start --open   # 顺手打开活跃会议室页面
+deploy/council_service.sh status         # 进程 + 健康 + 活跃会议室
+deploy/council_service.sh enter [会话ID] # 打印并打开会议室地址
+deploy/council_service.sh stop | restart | logs
+```
+
+两个实现细节值得记住：
+
+- **stop 只杀「真正占着这个端口」的进程**，并且先用 `/proc/<pid>/cmdline` 确认它
+  是 daphne。原因是脚本可能在不同 PID namespace 里被调用（例如包在 bwrap 沙箱里），
+  同一个进程在不同 namespace 里的号不一样 —— 拿 PID 文件里的号去宿主机 kill，
+  会杀掉完全不相干、甚至很关键的进程。PID 文件只当参考，`ss` 才是权威。
+- 端口被别的进程占着、但服务不健康时，脚本会拒绝启动，不会去抢端口。
 
 ## 八、代码风格约定
 
@@ -266,5 +291,5 @@ python tests/test_receive_message.py --room room_123 --auth token123   # WS 订�
 | 给会议室加业务字段 | `generic/models.py` + `python manage.py makemigrations generic` |
 | 加一个新的评审模型（GLM/Qwen/…） | 只改 `dsh-plugin/cordis.patch.yml` 的 `participants`，通常不用写代码 |
 | 加一种新的模型接入协议 | `dsh-plugin/lib/adapters/` 新增一个文件 + 在 `adapters/index.js` 注册 |
-| 改 3 秒窗口/等待时长 | `dsh-plugin/cordis.patch.yml` 的 `humanWindowMs` / `humanWaitMs` |
+| 改打断窗口时长/等待时长 | `dsh-plugin/cordis.patch.yml` 的 `humanWindowMs`（默认 10000）/ `humanWaitMs`；页面与提示词的文案会自动跟着变 |
 | 改「什么时候唤醒插件」 | `dsh-plugin/lib/usage.js`（注入 system prompt 的说明） |

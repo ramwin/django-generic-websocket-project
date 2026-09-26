@@ -1,7 +1,7 @@
 # dsh-plugin-ai-council
 
 把 **DeepSeek Harness** 和 **Kimi / Claude** 以及 **你自己** 放进同一个房间，
-让每一个关键步骤都经过异模型迭代评审，并且**每次都给你留 3 秒打断的机会**。
+让每一个关键步骤都经过异模型迭代评审，并且**每次都给你留一段打断的时间**（默认 10 秒，可配）。
 
 它建立在 [django-generic-websocket-project](../) 之上 —— 那个项目提供
 HTTP + WebSocket 的房间广播，本插件只是它的一个客户端。
@@ -12,7 +12,7 @@ HTTP + WebSocket 的房间广播，本插件只是它的一个客户端。
                                              ├─ HTTP POST ──► 会议室房间（广播）
                                              ├─ kimi -p   ┐ 并行评审
                                              ├─ claude API┘
-                                             └─ 等 3 秒看你要不要打断
+                                             └─ 等几秒看你要不要打断
                                                        ↓
                         django-generic-websocket-project ──► 会议室页面（你）
 ```
@@ -21,7 +21,7 @@ HTTP + WebSocket 的房间广播，本插件只是它的一个客户端。
 
 - **同一个模型审不出自己的错**：DeepSeek 写的计划由 Kimi / Claude 挑毛病，
   它们看到的是同一个房间里的完整上下文，包括前几轮别人说过什么。
-- **人在回路里，但不挡路**：模型意见一出来就弹 3 秒倒计时；
+- **人在回路里，但不挡路**：模型意见一出来就弹倒计时（默认 10 秒）；
   你没空就自动往下走，你想插手就按「打断」慢慢看。
 - **写文件的只有 DeepSeek**：外部模型跑在空临时目录里，只产出文字意见，
   所有落盘都留在 DSH 的沙箱与审批之内。
@@ -32,20 +32,20 @@ HTTP + WebSocket 的房间广播，本插件只是它的一个客户端。
 
 1. DeepSeek 做出这一步的产物；
 2. `council_review` 把产物发进房间，外部模型**并行**评审；
-3. 自动打开 3 秒人工窗口；
+3. 自动打开人工窗口（默认 10 秒）；
 4. 有 `revise` 就改，再调一次 `council_review`（下一轮）；
 5. 所有模型 `approve` 且你没有异议，这一步才算过。
 
-## 3 秒人工窗口的四种结果
+## 人工窗口的四种结果
 
 | `human.status` | 发生了什么 | DeepSeek 该怎么做 |
 |---|---|---|
-| `timeout` | 3 秒内没人打断 | 正常继续 |
+| `timeout` | 窗口内没人打断 | 正常继续 |
 | `resumed` | 你看了，选择继续 | 正常继续 |
 | `suggested` | 你注入了建议（`human.suggestion`） | **建议优先级高于所有模型意见**，先按它改 |
 | `paused` | 你按了打断但还没决定 | **停下来**，在对话里说清局面并问你 |
 
-阶段时长都可以配：`humanWindowMs`（默认 3000）、`humanWaitMs`（默认 600000，
+阶段时长都可以配：`humanWindowMs`（默认 10000）、`humanWaitMs`（默认 600000，
 即打断之后愿意等你多久）。
 
 ## 工具
@@ -53,7 +53,7 @@ HTTP + WebSocket 的房间广播，本插件只是它的一个客户端。
 | 工具 | 干什么 |
 |---|---|
 | `council_start` | 建会议室，返回围观页面地址 |
-| `council_review` | 送审一步产物 + 自动开 3 秒人工窗口（核心） |
+| `council_review` | 送审一步产物 + 自动开人工窗口（核心） |
 | `council_status` | 读回任务、轮次、最近结论和完整记录 |
 | `council_note` | 往房间广播一条自己的消息 |
 | `council_finish` | 写下结论、结束会话 |
@@ -107,7 +107,7 @@ dsh plugin --profile web add "$PWD/dsh-plugin"
 也可以在 DSH 的插件设置页改。随包的默认配置见 [cordis.patch.yml](cordis.patch.yml)：
 
 ```yaml
-humanWindowMs: 3000      # AI 给完意见后给你的打断窗口
+humanWindowMs: 10000     # AI 给完意见后给你的打断窗口（3 秒对真人太紧）
 humanWaitMs: 600000      # 你按下打断后，最多等你多久做决定
 pollWindowMs: 55000      # 单次长轮询上限，必须 < 服务端的 60 秒
 
@@ -167,7 +167,7 @@ cd dsh-plugin && node --test test/
 # 链路自检：插件 ↔ 真实会议室服务（模型换成桩，不消耗任何额度，17 项）
 node dsh-plugin/scripts/live-check.mjs --bus-url http://127.0.0.1:7420
 
-# 端到端演示（真服务 + 真 3 秒 + 真 Kimi）
+# 端到端演示（真服务 + 真窗口 + 真 Kimi）
 node dsh-plugin/scripts/e2e-demo.mjs --bus-url http://127.0.0.1:7420 \
      --kimi-home "$PWD/.kimi-home" --interrupt
 

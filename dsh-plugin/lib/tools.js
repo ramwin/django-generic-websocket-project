@@ -89,12 +89,14 @@ export function registerCouncilTools(ctx, config, deps = {}) {
         fetchImpl: deps.fetchImpl,
     });
     const runtime = { bus, config, deps };
+    // 提示词/工具描述里的窗口时长必须跟着配置走，否则改了配置提示词还在说旧数字
+    const windowSpan = `${Math.round(config.humanWindowMs / 1000)} 秒`;
 
     ctx.tools.register(safeTool({
         name: 'council_start',
         description: '创建一个 AI 会议室并把它作为这次任务的评审通道。'
             + '会议室里 DeepSeek、外部异模型（Kimi/Claude…）和人类共享同一份记录，'
-            + '人类可以打开返回的 page_url 实时围观并用 3 秒窗口打断。'
+            + `人类可以打开返回的 page_url 实时围观并用 ${windowSpan}窗口打断。`
             + '做完后每一步产物都用 council_review 送审。',
         parameters: {
             task: { type: 'string', required: true, description: '这次任务的完整描述。' },
@@ -158,7 +160,7 @@ export function registerCouncilTools(ctx, config, deps = {}) {
     ctx.tools.register(safeTool({
         name: 'council_review',
         description: '把某一步的产物发进会议室，让外部异模型并行评审，'
-            + '然后自动打开 3 秒人工窗口：人类可以在这几秒里点「打断」让循环停下来。'
+            + `然后自动打开 ${windowSpan}人工窗口：人类可以在这几秒里点「打断」让循环停下来。`
             + '返回每个模型的 approve/revise 结论和人工结果。'
             + '有 revise 就改完再调一次；直到所有模型 approve 才能进入下一步。',
         parameters: {
@@ -178,7 +180,7 @@ export function registerCouncilTools(ctx, config, deps = {}) {
             },
             human_window_ms: {
                 type: 'number',
-                description: '人工打断窗口时长，默认取配置（3000 毫秒）。',
+                description: `人工打断窗口时长，默认取配置（${config.humanWindowMs} 毫秒）。`,
             },
         },
         output: {
@@ -213,6 +215,7 @@ export function registerCouncilTools(ctx, config, deps = {}) {
                             status: { type: 'string', required: true },
                             suggestion: { type: 'string' },
                             error: { type: 'string' },
+                            window_ms: { type: 'number' },
                             notes: { type: 'array', items: { type: 'string' } },
                         },
                     },
@@ -290,14 +293,15 @@ export function registerCouncilTools(ctx, config, deps = {}) {
             // 4. 3 秒人工窗口。
             //    窗口本身失败（总线抖了、工具被取消）**不能**把上面辛苦拿到的
             //    评审意见一起丢掉 —— 那些意见已经落进会议室了，必须照常返回。
+            const usedWindowMs = Number(args.human_window_ms) > 0
+                ? Number(args.human_window_ms)
+                : config.humanWindowMs;
             let human;
             try {
                 human = await openHumanWindow({
                     bus,
                     sessionId,
-                    windowMs: Number(args.human_window_ms) > 0
-                        ? Number(args.human_window_ms)
-                        : config.humanWindowMs,
+                    windowMs: usedWindowMs,
                     waitMs: config.humanWaitMs,
                     pollWindowMs: config.pollWindowMs,
                     targetSeq: posted.seq,
@@ -339,6 +343,7 @@ export function registerCouncilTools(ctx, config, deps = {}) {
                     status: human.status,
                     suggestion: human.suggestion,
                     error: human.error,
+                    window_ms: usedWindowMs,
                     notes: (human.human_notes ?? []).map(note => note.content),
                 },
                 page_url: bus.pageUrl(sessionId),
@@ -535,7 +540,11 @@ export function renderReviewResult(value) {
     lines.push('--- 人工窗口 ---');
     const human = value.human ?? {};
     if (human.status === 'timeout') {
-        lines.push('3 秒内没有人打断，自动继续。');
+        const usedWindow = Number(value.human?.window_ms) > 0
+            ? Math.round(value.human.window_ms / 1000) : null;
+        lines.push(usedWindow === null
+            ? '没有人打断，自动继续。'
+            : `${usedWindow} 秒内没有人打断，自动继续。`);
     } else if (human.status === 'resumed') {
         lines.push('人类选择继续循环。');
     } else if (human.status === 'suggested') {
