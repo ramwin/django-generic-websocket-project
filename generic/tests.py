@@ -391,3 +391,222 @@ class BroadcastHelperTests(TestCase):
     def test_missing_channel_layer_is_tolerated(self):
         with mock.patch.object(council, "get_channel_layer", return_value=None):
             council.broadcast("room_x", {"message": "hi"})
+
+
+class CouncilAdminTests(TestCase):
+    """AI 会议室的 admin 注册。
+
+    admin 是给人看会议记录的地方，所以这里钉两件事：**能看**（两个 changelist
+    和会话详情页都要 200）和**只能看**（增/改/删三个入口全关）。
+
+    刻意不写 ``has_view_permission``：它查的是模型层权限，与
+    ``ReadOnlyAdmin.has_change_permission`` 无关，显式返回 True 会把会议记录
+    放开给所有 staff 用户。下面的权限断言就是在钉这一点。
+    """
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        user_model = get_user_model()
+        self.superuser = user_model.objects.create_superuser(
+            username="council_root", email="root@example.com", password="pw-root")
+        #: 已登录但**不是** staff：admin 应该把它挡在登录页
+        self.plain_user = user_model.objects.create_user(
+            username="council_plain", password="pw-plain")
+
+        self.session = council.create_session(
+            task="把 health check 加上超时", participants=["kimi", "claude"])
+        # post_message 收的是**模型实例**（见 council.post_message 的签名），
+        # 不是 session_id —— 这里传错过一次，记一笔。
+        self.message = council.post_message(
+            self.session, sender="kimi", role="review",
+            step="plan", content="第一条评审意见")
+
+    # ------------------------------------------------------------ 注册
+
+    def test_两个模型都注册进了_admin(self):
+        from django.contrib import admin as django_admin
+        self.assertIn(CouncilSession, django_admin.site._registry)
+        self.assertIn(CouncilMessage, django_admin.site._registry)
+
+    def test_只读是用权限方法关的_不是靠_readonly_fields(self):
+        # readonly_fields 只影响表单渲染，管不到增删入口。
+        # 「只追加」这个契约必须在权限方法上直接编码。
+        from django.contrib import admin as django_admin
+        for model in (CouncilSession, CouncilMessage):
+            model_admin = django_admin.site._registry[model]
+            for name in ("has_add_permission", "has_change_permission",
+                         "has_delete_permission"):
+                self.assertFalse(
+                    getattr(model_admin, name)(self._request()),
+                    f"{model.__name__}.{name} 应该返回 False")
+
+    def test_没有_has_view_permission_的显式放宽(self):
+        # 一旦有人加上 `def has_view_permission: return True`，
+        # 任何 staff 用户都能看全部会议记录。这条测试专门防这个改动。
+        #
+        # 基类和**每个子类**都要查：只盯基类的话，把方法写在
+        # CouncilSessionAdmin 上就漏过去了（评审指出的盲区）。
+        from django.contrib import admin as django_admin
+        from generic.admin import ReadOnlyAdmin
+        self.assertNotIn("has_view_permission", ReadOnlyAdmin.__dict__)
+        for model in (CouncilSession, CouncilMessage):
+            model_admin = django_admin.site._registry[model]
+            self.assertNotIn("has_view_permission", type(model_admin).__dict__)
+            # 顺着 MRO 找到第一个定义了它的类，必须只有 django 自己的默认实现
+            owner = next(
+                (klass for klass in type(model_admin).__mro__
+                 if "has_view_permission" in klass.__dict__), None)
+            self.assertIsNotNone(owner)
+            self.assertNotIn(owner.__name__, ("CouncilSessionAdmin", "CouncilMessageAdmin",
+                                             "ReadOnlyAdmin"))
+
+    def _request(self):
+        request = mock.Mock()
+        request.user = self.superuser
+        return request
+
+    # ------------------------------------------------------------ 能看
+
+    def test_会话列表页_200_并且渲染出了消息数与参与模型(self):
+        self.client.force_login(self.superuser)
+        response = self.client.get(
+            reverse("admin:generic_councilsession_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.session.session_id)
+        # annotate 出来的消息数
+        self.assertContains(response, ">1<")
+        # participants 是 JSONField，必须经方法渲染成文本
+        self.assertContains(response, "kimi")
+        self.assertContains(response, "claude")
+
+    def test_消息列表页_200(self):
+        self.client.force_login(self.superuser)
+        response = self.client.get(
+            reverse("admin:generic_councilmessage_changelist"))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "第一条评审意见")
+
+    def test_会话详情页_200_并且给出跳转到消息列表的链接(self):
+        # 详情页是「放弃 inline」之后真正的落地点，必须真的有这个链接
+        self.client.force_login(self.superuser)
+        response = self.client.get(reverse(
+            "admin:generic_councilsession_change", args=[self.session.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "查看该会话的消息")
+        self.assertContains(
+            response, f"session__id__exact={self.session.pk}")
+
+    def test_带会话过滤的消息列表能打开(self):
+        # 就是上面那个链接指向的地址
+        self.client.force_login(self.superuser)
+        response = self.client.get(
+            reverse("admin:generic_councilmessage_changelist"),
+            {"session__id__exact": self.session.pk})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "第一条评审意见")
+
+    def test_消息详情页_200(self):
+        self.client.force_login(self.superuser)
+        response = self.client.get(reverse(
+            "admin:generic_councilmessage_change", args=[self.message.pk]))
+        self.assertEqual(response.status_code, 200)
+
+    def test_add_入口被挡住(self):
+        # 只读不能只靠隐藏按钮：直接访问 /add/ 也必须被拒
+        self.client.force_login(self.superuser)
+        for name in ("admin:generic_councilsession_add",
+                     "admin:generic_councilmessage_add"):
+            response = self.client.get(reverse(name))
+            self.assertIn(response.status_code, (302, 403),
+                          f"{name} 应该被拒，实际 {response.status_code}")
+
+    # ------------------------------------------------------------ 挡住
+
+    def test_匿名用户被重定向到登录页(self):
+        for name in ("admin:generic_councilsession_changelist",
+                     "admin:generic_councilmessage_changelist"):
+            response = self.client.get(reverse(name))
+            self.assertEqual(response.status_code, 302)
+            self.assertIn("/admin/login/", response["Location"])
+
+    def test_已登录但非_staff_也被重定向(self):
+        # 这条和上一条是两种身份：匿名 vs 已登录无权限。
+        # 用 is_staff=False 的号，走的是 302；若用 is_staff=True 但无模型权限
+        # 的号，会变成 403 PermissionDenied，断言目标不同。
+        self.client.force_login(self.plain_user)
+        response = self.client.get(
+            reverse("admin:generic_councilsession_changelist"))
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/admin/login/", response["Location"])
+
+
+    def test_消息列表不会按行数增加查询(self):
+        """session_link 每行都要读 obj.session，必须 select_related。
+
+        评审指出的 N+1：没有 select_related 时，每多一条消息就多一条查会话的
+        SQL（list_per_page=50 时每页 51 条）。这里用「同一页里 1 条 vs 6 条
+        消息的查询数必须相同」来钉住它 —— 比写死一个魔法数字稳。
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self.client.force_login(self.superuser)
+        url = reverse("admin:generic_councilmessage_changelist")
+
+        def queries_for(extra):
+            CouncilMessage.objects.filter(pk=self.message.pk).delete()
+            council.post_message(self.session, sender="kimi", role="review",
+                                 content="第一条评审意见")
+            for index in range(extra):
+                council.post_message(self.session, sender="kimi", role="review",
+                                     content=f"第 {index} 条")
+            with CaptureQueriesContext(connection) as captured:
+                response = self.client.get(url)
+            self.assertEqual(response.status_code, 200)
+            return len(captured)
+
+        one = queries_for(0)
+        six = queries_for(5)
+        self.assertEqual(
+            one, six,
+            f"消息从 1 条变成 6 条时查询数从 {one} 变到 {six} —— 说明每行都在查会话（N+1）")
+
+
+class CouncilAdminRenderingTests(TestCase):
+    """展示方法的纯函数测试：JSONField 里什么脏数据都不能让页面 500。"""
+
+    def test_render_participants_处理字符串列表(self):
+        from generic.admin import render_participants
+        self.assertEqual(render_participants(["kimi", "claude"]), "kimi、claude")
+
+    def test_render_participants_处理字典列表(self):
+        # HTTP 接口收任意 JSON，外部客户端可能塞 list[dict]。
+        # 直接 join 会 TypeError —— 而 changelist 渲染期抛异常就是 500。
+        from generic.admin import render_participants
+        self.assertEqual(
+            render_participants([{"name": "kimi"}, {"label": "Claude"}]),
+            "kimi、Claude")
+
+    def test_render_participants_兜住各种奇怪输入(self):
+        from generic.admin import render_participants
+        self.assertEqual(render_participants([]), "—")
+        self.assertEqual(render_participants(None), "—")
+        self.assertEqual(render_participants({}), "—")
+        # dict 而不是 list：取 key，不能崩
+        self.assertEqual(render_participants({"kimi": 1}), "kimi")
+        # 不是列表也不是字典
+        self.assertEqual(render_participants("kimi"), "kimi")
+        # 未知形状的 dict 也要能渲染
+        self.assertEqual(render_participants([{"weird": 1}]), "{'weird': 1}")
+
+    def test_content_preview_截断长正文并处理空正文(self):
+        from generic.admin import CouncilMessageAdmin
+        model_admin = CouncilMessageAdmin(CouncilMessage, None)
+        short = CouncilMessage(content="短")
+        self.assertEqual(model_admin.content_preview(short), "短")
+        long = CouncilMessage(content="字" * 200)
+        preview = model_admin.content_preview(long)
+        self.assertEqual(len(preview), 81)          # 80 个字 + 省略号
+        self.assertTrue(preview.endswith("…"))
+        self.assertEqual(model_admin.content_preview(CouncilMessage(content="  ")), "—")
