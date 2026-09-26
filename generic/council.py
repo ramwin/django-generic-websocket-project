@@ -31,6 +31,11 @@ from .models import CouncilMessage, CouncilSession
 LOGGER = logging.getLogger(__name__)
 
 #: 长轮询的最长等待时间，避免占用 Django 的工作线程过久。
+#:
+#: **这是硬上限，``?wait=`` 超出它的部分会被静默截断。** 客户端不要指望
+#: 「一次请求就等满想要的时长」——想要更长的等待必须自己循环重发。
+#: 插件的 3 秒人工窗口就踩过这个坑：它配了 10 分钟，实际只等了 60 秒，
+#: 用户在 60 秒之后写的建议没人接。现在插件按 ``pollWindowMs`` 循环轮询。
 MAX_WAIT_SECONDS = 60.0
 #: 长轮询的轮询间隔。
 POLL_INTERVAL_SECONDS = 0.2

@@ -57,7 +57,7 @@ function setup({ fetchImpl = approveAll, bus = new FakeCouncilBus() } = {}) {
         tools: { register: tool => registered.set(tool.name, tool) },
         systemPrompt: { section: () => {} },
     };
-    registerCouncilTools(ctx, testConfig(), { bus, fetchImpl });
+    registerCouncilTools(ctx, testConfig(), { bus, fetchImpl, now: () => bus.clock.t });
     return { tools: registered, bus };
 }
 

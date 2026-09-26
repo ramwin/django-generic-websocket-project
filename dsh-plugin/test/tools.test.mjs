@@ -67,7 +67,7 @@ function makeCtx() {
 
 function setup({ config = testConfig(), fetchImpl = alwaysApprove, bus = new FakeCouncilBus() } = {}) {
     const { ctx, registered, sections } = makeCtx();
-    const runtime = registerCouncilTools(ctx, config, { bus, fetchImpl });
+    const runtime = registerCouncilTools(ctx, config, { bus, fetchImpl, now: () => bus.clock.t });
     const byName = Object.fromEntries(registered.map(tool => [tool.name, tool]));
     return { ctx, registered, sections, runtime, bus, byName };
 }

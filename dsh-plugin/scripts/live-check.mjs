@@ -24,6 +24,7 @@ import { validateJsonSchemaValue } from '@deepseek-ai/dsh-tools';
 
 import { CouncilBus } from '../lib/council-client.js';
 import { resolveConfig } from '../lib/config.js';
+import { openHumanWindow } from '../lib/human-window.js';
 import { losslessJsonProblems } from '../lib/json-safe.js';
 import { registerCouncilTools } from '../lib/tools.js';
 
@@ -68,6 +69,8 @@ async function main() {
     const { values } = parseArgs({
         options: {
             'bus-url': { type: 'string', default: 'http://127.0.0.1:7420' },
+            // 会真的等 65 秒，用来证明「等待超过服务端 60 秒上限」仍然成立
+            slow: { type: 'boolean', default: false },
         },
     });
 
@@ -190,6 +193,40 @@ async function main() {
     check('结论也落库了',
         (reread.session?.conclusion ?? '').includes('链路自检通过'),
         reread.session?.conclusion ?? '(空)');
+
+    if (values.slow) {
+        console.log(`\n${BOLD}5. 慢检查：等待超过服务端 60 秒上限（约 65 秒）${RESET}`);
+        // 服务端 generic/council.py 的 MAX_WAIT_SECONDS = 60 是硬上限、会静默
+        // 截断。曾经插件只发一次 ?wait=humanWaitMs 的请求，于是「配了 10 分钟、
+        // 实际只等 60 秒」，人在 60 秒后写的建议没人接（真实踩过）。
+        // 这条检查把「人类在 65 秒后才做决定」跑到真服务上，必须被接住。
+        const slowSession = await bus.createSession({
+            task: '慢检查：长等待', participants: [],
+        });
+        const slowId = slowSession.session_id;
+        const t0 = Date.now();
+        setTimeout(() => { bus.humanAction(slowId, { kind: 'interrupt' }); }, 1000);
+        setTimeout(() => {
+            bus.humanAction(slowId, { kind: 'suggest', content: '我在 65 秒后才写的建议' });
+        }, 65_000);
+        const slow = await openHumanWindow({
+            bus,
+            sessionId: slowId,
+            windowMs: 5000,
+            waitMs: 90_000,
+            pollWindowMs: 55_000,
+        });
+        const seconds = (Date.now() - t0) / 1000;
+        check('60 秒之后才到达的人类建议仍然被接住（等待是循环的）',
+            slow.status === 'suggested'
+            && String(slow.suggestion ?? '').includes('65 秒后'),
+            `status=${slow.status} suggestion=${slow.suggestion ?? '(无)'}`);
+        check('确实是等到 65 秒之后才返回（说明没有被 60 秒截断）',
+            seconds >= 60, `实际 ${seconds.toFixed(1)}s`);
+        await bus.finish(slowId, { conclusion: '慢检查完成' });
+    } else {
+        console.log(`\n${DIM}   （跳过慢检查；想验「等待超过服务端 60 秒上限」加 --slow，约 65 秒）${RESET}`);
+    }
 
     console.log(`\n${'='.repeat(60)}`);
     console.log(`通过 ${report.passed.length} 项，失败 ${report.failed.length} 项`);

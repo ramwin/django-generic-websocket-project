@@ -26,6 +26,11 @@ export class FakeCouncilBus {
         //: 从第几次 getMessages（1 基）开始抛错；null 表示不抛。
         this.failGetFrom = null;
         this.getCount = 0;
+        // 等待是**循环长轮询**，靠真实时钟会一直转到 humanWaitMs（默认 10 分钟）
+        // 才收手。所以假会议室自带一个时钟，每次长轮询就往前走一格，让循环在
+        // 测试里瞬间跑完、而且结果确定。
+        this.clock = { t: 1_000_000 };
+        this.clockStepMs = 10_000;
     }
 
     pageUrl(sessionId) {
@@ -99,6 +104,8 @@ export class FakeCouncilBus {
     async getMessages(sessionId, { after = 0, roles } = {}) {
         const session = this._require(sessionId);
         this.getCount += 1;
+        // 每轮长轮询推进一格假时钟，让「循环等到 deadline」在测试里是瞬时的
+        this.clock.t += this.clockStepMs;
         if (this.failGetFrom !== null && this.getCount >= this.failGetFrom) {
             throw new Error('fake bus 连接中断');
         }

@@ -3,6 +3,10 @@
  *
  * 这是整个插件里语义最容易写错的一块，所以把四种结果、两个阶段、
  * 以及留言收集都单独钉死。
+ *
+ * 关于时间：等待是**循环长轮询**（见 waitForHumanAction），所以测试不能靠
+ * 真实时钟——否则一个 waitMs=600000 的用例要跑十分钟。这里统一注入假时钟：
+ * 每次 getMessages 就把时间往前推 stepMs。
  */
 
 import { test } from 'node:test';
@@ -12,16 +16,18 @@ import {
     collectHumanNotes,
     dedupeNotes,
     describeOutcome,
+    MAX_SINGLE_POLL_MS,
     openHumanWindow,
     pickHumanAction,
+    waitForHumanAction,
     WINDOW_ROLES,
 } from '../lib/human-window.js';
 
 /**
  * 假会议室：按脚本依次返回长轮询结果。
  *
- * 它同时记录每次 getMessages 的查询参数，用来断言「3 秒窗口真的就是
- * 一次 wait=3 的长轮询」，以及每一段等的是哪些角色。
+ * 它同时记录每次 getMessages 的查询参数，用来断言「单次请求不超过服务端
+ * 上限」「阶段 2 等的是哪些角色」「游标有没有推进」。
  */
 class FakeBus {
     constructor(batches = [], { failGet = null, failPostRoles = [] } = {}) {
@@ -34,6 +40,8 @@ class FakeBus {
         this.getCount = 0;
         //: 对这些 role 的 postMessage 抛错。
         this.failPostRoles = failPostRoles;
+        //: 每次 getMessages 前调用，用来推进假时钟。
+        this.onGet = null;
     }
 
     async postMessage(sessionId, message) {
@@ -47,6 +55,9 @@ class FakeBus {
     }
 
     async getMessages(sessionId, options) {
+        if (typeof this.onGet === 'function') {
+            this.onGet();
+        }
         this.calls.push(options);
         this.getCount += 1;
         if (this.failGet !== null && this.getCount >= this.failGet) {
@@ -61,15 +72,34 @@ function message(seq, role, content = '') {
     return { seq, role, sender: role === 'note' ? 'human' : 'human', content, session_id: 'c1' };
 }
 
-test('没人打断：3 秒后自动继续，并回帖一条 outcome=timeout', async () => {
+/**
+ * 用假时钟跑一次窗口。
+ *
+ * 每次 getMessages 把时间推进 ``stepMs``，因此「等 10 分钟」在测试里是瞬时且
+ * 确定的。
+ */
+function runWindow(bus, { stepMs = 10_000, ...options } = {}) {
+    const clock = { t: 1_000_000 };
+    bus.onGet = () => { clock.t += stepMs; };
+    return openHumanWindow({
+        bus,
+        sessionId: 'c1',
+        now: () => clock.t,
+        ...options,
+    });
+}
+
+// ---------------------------------------------------------------- 四种结果
+
+test('没人打断：窗口到点自动继续，并回帖一条 outcome=timeout', async () => {
     const bus = new FakeBus([{ messages: [], timed_out: true }]);
-    const result = await openHumanWindow({
-        bus, sessionId: 'c1', windowMs: 3000, waitMs: 600000, targetSeq: 7,
+    const result = await runWindow(bus, {
+        windowMs: 3000, waitMs: 600000, targetSeq: 7,
     });
     assert.equal(result.status, 'timeout');
-    // 第一次是 3 秒长轮询，第二次是不等待的竞态兜底补查
+    // 第一次是 3 秒窗口的轮询，第二次是不等待的竞态兜底补查
     assert.equal(bus.calls.length, 2);
-    assert.equal(bus.calls[0].wait, 3);
+    assert.equal(bus.calls[0].wait, 3, '窗口 3 秒只发一次 wait=3 就够（未到单次上限）');
     assert.deepEqual(bus.calls[0].roles, WINDOW_ROLES);
     assert.equal(bus.calls[0].after, 1, '应该从窗口开启那条消息之后开始等');
     assert.equal(bus.calls[1].wait, 0, '兜底补查不能等待');
@@ -82,41 +112,19 @@ test('没人打断：3 秒后自动继续，并回帖一条 outcome=timeout', as
     assert.equal(bus.posted[1].payload.outcome, 'timeout');
 });
 
-test('竞态兜底：窗口刚过期那一瞬间到达的打断仍然算数', async () => {
-    // 第一次长轮询什么也没等到，补查时才发现人类其实按了打断
-    const bus = new FakeBus([
-        { messages: [], timed_out: true },
-        { messages: [message(2, 'interrupt')] },
-        { messages: [message(3, 'suggest', '别用 sqlite')] },
-    ]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1', windowMs: 3000 });
-    assert.equal(result.status, 'suggested',
-        '补查抓到的打断必须被当成真的打断，而不是 timeout');
+test('窗口内直接点「加入建议」也算，不必先打断', async () => {
+    const bus = new FakeBus([{ messages: [message(2, 'suggest', '别用 sqlite')] }]);
+    const result = await runWindow(bus, { windowMs: 3000 });
+    assert.equal(result.status, 'suggested');
     assert.equal(result.suggestion, '别用 sqlite');
-    assert.equal(bus.posted.at(-1).payload.outcome, 'suggested');
+    assert.equal(bus.calls.length, 1, '命中后就不再轮询了');
 });
 
-test('总线出错：窗口照样会被关上，状态是 aborted 而不是 timeout', async () => {
-    const bus = new FakeBus([], { failGet: 1 });
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
-    assert.equal(result.status, 'aborted');
-    assert.match(result.error, /总线连接中断/);
-    // 关键：会议室不能永远停在「等人工确认」
-    assert.equal(bus.posted.at(-1).role, 'human_window_close');
-    assert.equal(bus.posted.at(-1).payload.outcome, 'aborted');
-});
-
-test('关窗本身失败也不能抛出去（否则会盖掉已经拿到的评审结果）', async () => {
-    const bus = new FakeBus([], { failGet: 1, failPostRoles: ['human_window_close'] });
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
-    assert.equal(result.status, 'aborted');
-});
-
-test('阶段 2 出错也要关窗', async () => {
-    const bus = new FakeBus([{ messages: [message(2, 'interrupt')] }], { failGet: 2 });
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
-    assert.equal(result.status, 'aborted');
-    assert.equal(bus.posted.at(-1).payload.outcome, 'aborted');
+test('窗口内直接点「恢复循环」', async () => {
+    const bus = new FakeBus([{ messages: [message(2, 'resume')] }]);
+    const result = await runWindow(bus, { windowMs: 3000 });
+    assert.equal(result.status, 'resumed');
+    assert.equal(bus.calls.length, 1);
 });
 
 test('打断后选择恢复：status=resumed', async () => {
@@ -124,9 +132,9 @@ test('打断后选择恢复：status=resumed', async () => {
         { messages: [message(2, 'interrupt')] },
         { messages: [message(3, 'resume')] },
     ]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1', windowMs: 3000 });
+    const result = await runWindow(bus, { windowMs: 3000 });
     assert.equal(result.status, 'resumed');
-    // 阶段 2 等的是「恢复 / 建议」，时长用 waitMs
+    // 阶段 2 等的是「恢复 / 建议」
     assert.equal(bus.calls.length, 2);
     assert.deepEqual(bus.calls[1].roles, ['resume', 'suggest']);
     assert.equal(bus.calls[1].after, 2);
@@ -138,7 +146,7 @@ test('打断后注入建议：status=suggested，建议正文带出来', async (
         { messages: [message(2, 'interrupt')] },
         { messages: [message(3, 'suggest', '先把 Redis 多实例也测一遍')] },
     ]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
+    const result = await runWindow(bus, { windowMs: 3000 });
     assert.equal(result.status, 'suggested');
     assert.equal(result.suggestion, '先把 Redis 多实例也测一遍');
     assert.equal(bus.posted.at(-1).payload.outcome, 'suggested');
@@ -149,32 +157,122 @@ test('打断后一直不决定：status=paused，把控制权交回 DeepSeek', a
         { messages: [message(2, 'interrupt')] },
         { messages: [], timed_out: true },
     ]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1', waitMs: 600000 });
+    const result = await runWindow(bus, { windowMs: 3000, waitMs: 600000 });
     assert.equal(result.status, 'paused');
     assert.equal(bus.posted.at(-1).payload.outcome, 'paused');
 });
 
-test('窗口内直接点「加入建议」也算，不必先打断', async () => {
-    const bus = new FakeBus([{ messages: [message(2, 'suggest', '别用 sqlite')] }]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
-    assert.equal(result.status, 'suggested');
-    assert.equal(result.suggestion, '别用 sqlite');
-    // 没有进入阶段 2
-    assert.equal(bus.calls.length, 1);
+// ---------------------------------------------------------------- 回归：长等待
+
+test('回归：waitMs 远超单次请求上限时，必须一直轮询到人做决定', async () => {
+    // 真实踩过的 bug：打断之后用户过了 60 秒才写建议，而实现只发了一次
+    // ?wait=600 的请求，服务端把它截断成 60 秒就返回了，于是工具误判为
+    // 「没人决定」并把控制权交回 DeepSeek —— 用户的建议再也没人接。
+    const bus = new FakeBus([
+        { messages: [message(2, 'interrupt')] },                    // 阶段 1：打断
+        { messages: [] },                                           // 阶段 2 第 1 轮
+        { messages: [] },                                           // 阶段 2 第 2 轮
+        { messages: [message(9, 'suggest', 'kimi 报错了，修好再跑')] }, // 第 3 轮才出现
+    ]);
+    const result = await runWindow(bus, { windowMs: 3000, waitMs: 600000 });
+    assert.equal(result.status, 'suggested', '晚到的建议必须被接住，不能判成 paused');
+    assert.equal(result.suggestion, 'kimi 报错了，修好再跑');
+    const phase2 = bus.calls.filter(
+        call => JSON.stringify(call.roles) === JSON.stringify(['resume', 'suggest']));
+    assert.equal(phase2.length, 3, '阶段 2 应该轮询了 3 次，而不是打一枪就走');
 });
 
-test('窗口内直接点「恢复循环」', async () => {
-    const bus = new FakeBus([{ messages: [message(2, 'resume')] }]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
-    assert.equal(result.status, 'resumed');
-    assert.equal(bus.calls.length, 1);
+test('单次长轮询请求不会超过服务端 60 秒上限', async () => {
+    const bus = new FakeBus([
+        { messages: [message(2, 'interrupt')] },
+        { messages: [] }, { messages: [] },
+        { messages: [message(9, 'resume')] },
+    ]);
+    await runWindow(bus, { windowMs: 3000, waitMs: 600000 });
+    assert.ok(bus.calls.length > 0);
+    for (const call of bus.calls) {
+        assert.ok(call.wait * 1000 <= 60_000,
+            `单次 wait=${call.wait}s 超过了服务端 60s 上限，会被静默截断`);
+        assert.ok(call.wait * 1000 <= MAX_SINGLE_POLL_MS,
+            `单次 wait=${call.wait}s 超过了插件自己的上限`);
+    }
 });
+
+test('waitForHumanAction 循环到自己的 deadline 才放弃', async () => {
+    const bus = new FakeBus([{ messages: [] }, { messages: [] }]);
+    const clock = { t: 0 };
+    bus.onGet = () => { clock.t += 1000; };
+    const outcome = await waitForHumanAction({
+        bus, sessionId: 'c1', afterSeq: 0, roles: ['interrupt'],
+        timeoutMs: 2500, maxSinglePollMs: 1000, now: () => clock.t,
+    });
+    assert.equal(outcome.action, undefined);
+    assert.equal(outcome.timedOut, true);
+    // t: 0 → 1000（还剩 1500）→ 2000（还剩 500）→ 3000（超时）
+    assert.equal(bus.calls.length, 3);
+});
+
+test('轮询会推进游标，不会反复取回同一批消息', async () => {
+    const bus = new FakeBus([
+        { messages: [message(5, 'note', 'a')] },
+        { messages: [] },
+    ]);
+    const clock = { t: 0 };
+    bus.onGet = () => { clock.t += 10_000; };
+    await waitForHumanAction({
+        bus, sessionId: 'c1', afterSeq: 0, roles: ['interrupt'],
+        timeoutMs: 25_000, maxSinglePollMs: 10_000, now: () => clock.t,
+    });
+    assert.equal(bus.calls[0].after, 0);
+    assert.equal(bus.calls[1].after, 5, '第二轮应该从刚取到的 seq=5 之后开始');
+});
+
+// ---------------------------------------------------------------- 竞态与容错
+
+test('竞态兜底：窗口刚过期那一瞬间到达的打断仍然算数', async () => {
+    // 第一次长轮询什么也没等到，补查时才发现人类其实按了打断
+    const bus = new FakeBus([
+        { messages: [], timed_out: true },
+        { messages: [message(2, 'interrupt')] },
+        { messages: [message(3, 'suggest', '别用 sqlite')] },
+    ]);
+    const result = await runWindow(bus, { windowMs: 3000 });
+    assert.equal(result.status, 'suggested',
+        '补查抓到的打断必须被当成真的打断，而不是 timeout');
+    assert.equal(result.suggestion, '别用 sqlite');
+    assert.equal(bus.posted.at(-1).payload.outcome, 'suggested');
+});
+
+test('总线出错：窗口照样会被关上，状态是 aborted 而不是 timeout', async () => {
+    const bus = new FakeBus([], { failGet: 1 });
+    const result = await runWindow(bus, { windowMs: 3000 });
+    assert.equal(result.status, 'aborted');
+    assert.match(result.error, /总线连接中断/);
+    // 关键：会议室不能永远停在「等人工确认」
+    assert.equal(bus.posted.at(-1).role, 'human_window_close');
+    assert.equal(bus.posted.at(-1).payload.outcome, 'aborted');
+});
+
+test('关窗本身失败也不能抛出去（否则会盖掉已经拿到的评审结果）', async () => {
+    const bus = new FakeBus([], { failGet: 1, failPostRoles: ['human_window_close'] });
+    const result = await runWindow(bus, { windowMs: 3000 });
+    assert.equal(result.status, 'aborted');
+});
+
+test('阶段 2 出错也要关窗', async () => {
+    const bus = new FakeBus([{ messages: [message(2, 'interrupt')] }], { failGet: 2 });
+    const result = await runWindow(bus, { windowMs: 3000 });
+    assert.equal(result.status, 'aborted');
+    assert.equal(bus.posted.at(-1).payload.outcome, 'aborted');
+});
+
+// ---------------------------------------------------------------- 小工具
 
 test('窗口里的普通留言被收集，但不改变状态', async () => {
     const bus = new FakeBus([{
         messages: [message(2, 'note', '我在看，稍等'), message(3, 'note', '  ')],
     }]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
+    const result = await runWindow(bus, { windowMs: 3000 });
     assert.equal(result.status, 'timeout');
     assert.deepEqual(result.human_notes.map(item => item.content), ['我在看，稍等']);
 });
@@ -206,7 +304,7 @@ test('竞态补查不会把同一条留言重复收集', async () => {
         { messages: [note] },
         { messages: [note] },
     ]);
-    const result = await openHumanWindow({ bus, sessionId: 'c1' });
+    const result = await runWindow(bus, { windowMs: 3000 });
     assert.equal(result.status, 'timeout');
     assert.deepEqual(result.human_notes, [{ seq: 2, content: '我在看，稍等' }]);
 });
@@ -220,11 +318,11 @@ test('dedupeNotes 按 seq 去重并保持顺序', () => {
 
 test('窗口开启说明里带上秒数', async () => {
     const bus = new FakeBus([{ messages: [], timed_out: true }]);
-    await openHumanWindow({ bus, sessionId: 'c1', windowMs: 5000 });
+    await runWindow(bus, { windowMs: 5000 });
     assert.match(bus.posted[0].content, /5 秒/);
 });
 
-test('describeOutcome 覆盖四种结果', () => {
+test('describeOutcome 覆盖全部结果', () => {
     assert.match(describeOutcome('timeout'), /自动继续/);
     assert.match(describeOutcome('resumed'), /恢复循环/);
     assert.match(describeOutcome('suggested'), /加入.*建议/);

@@ -21,20 +21,32 @@
         # DeepSeek，由它在对话里继续问你。
         humanWaitMs: 600000
 
+        # 单次长轮询请求的上限，单位毫秒。
+        # **必须小于服务端 generic/council.py 的 MAX_WAIT_SECONDS（60 秒）**，
+        # 否则服务端会把它静默截断，humanWaitMs 配的时长就会缩水。
+        # 走 nginx 时注意 proxy_read_timeout（默认也是 60 秒），要一起调。
+        pollWindowMs: 55000
+
         # 单个模型评审的超时时间。
         reviewTimeoutMs: 180000
 
         # 参与评审的异模型。
+        #
         # kimi 走本机已登录的 kimi CLI（Kimi For Coding 订阅，无需 API key）。
-        # claude 走 Anthropic Messages API —— baseUrl / apiKeyEnv / model
-        # 都可替换，方便接入别人的中转或换个模型。
+        #   注意：它直接使用你真实的 ~/.kimi-code。令牌失效时 CLI 会把凭据
+        #   清空，所以这里跑失败之后要用 `kimi login` 重新授权。
+        #
+        # claude 只是「Anthropic 协议」这个接口的名字；下面这套配置实际指向
+        #   DeepSeek 的 Anthropic 兼容端点（与本机 ANTHROPIC_BASE_URL 一致）。
+        #   baseUrl / apiKeyEnv / model 都可替换，换成真 Claude 或任何中转。
         participants:
           kimi:
             adapter: kimi-cli
             label: Kimi
           claude:
             adapter: claude-api
-            label: Claude
-            baseUrl: https://api.anthropic.com
-            apiKeyEnv: ANTHROPIC_API_KEY
-            model: claude-sonnet-4-5
+            label: DeepSeek（Anthropic 接口）
+            baseUrl: https://api.deepseek.com/anthropic
+            apiKeyEnv: DEEPSEEK_API_KEY
+            model: deepseek-chat
+            maxTokens: 4096

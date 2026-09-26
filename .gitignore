@@ -14,7 +14,13 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# 只忽略仓库根目录下的 lib/（Python 打包产物）。
+# 原规则是 `lib/`，会连子目录一起吃掉 —— 结果 dsh-plugin/lib/（插件源码）
+# 被静默忽略，第一个 commit 里的插件根本没有代码。别改回去。
+/lib/
+# 全局 gitignore（core.excludesFile）里还有一条 `lib/`，同样会吃掉子目录。
+# 仓库内的规则优先级更高，这里显式取反把插件源码捞回来。
+!dsh-plugin/lib/
 lib64/
 parts/
 sdist/

@@ -107,17 +107,27 @@ dsh plugin --profile web add "$PWD/dsh-plugin"
 也可以在 DSH 的插件设置页改。随包的默认配置见 [cordis.patch.yml](cordis.patch.yml)：
 
 ```yaml
+humanWindowMs: 3000      # AI 给完意见后给你的打断窗口
+humanWaitMs: 600000      # 你按下打断后，最多等你多久做决定
+pollWindowMs: 55000      # 单次长轮询上限，必须 < 服务端的 60 秒
+
 participants:
   kimi:
     adapter: kimi-cli            # 走本机已登录的 kimi CLI，不需要 API key
   claude:
     adapter: claude-api          # baseUrl / apiKeyEnv / model 都可换
-    baseUrl: https://api.anthropic.com
-    apiKeyEnv: ANTHROPIC_API_KEY
-    model: claude-sonnet-4-5
+    label: DeepSeek（Anthropic 接口）
+    baseUrl: https://api.deepseek.com/anthropic
+    apiKeyEnv: DEEPSEEK_API_KEY
+    model: deepseek-chat
 ```
 
-**这是一个对外暴露的接口**：别人要接自己的中转或别的模型，只改这三行就行。
+**`claude` 只是「Anthropic 协议」这个适配器的名字，不是模型名。** 上面这份
+默认配置实际指向 DeepSeek 的 Anthropic 兼容端点；想接真 Claude 或别的中转，
+改 `baseUrl` / `apiKeyEnv` / `model` 这三行就行。
+
+> 注意：如果两边都指向同一个模型（比如都用 DeepSeek），评审就失去了
+> 「异模型交叉校验」的意义 —— 那正是这套东西想解决的问题。
 
 想再加一个异模型（GLM / Qwen / Moonshot…），只需要加一段配置，不用改代码：
 
@@ -205,4 +215,20 @@ DSH 自带的 AgentTeams 解决「多个 agent 分工干活」；本插件解决
 - 外部模型只能产出文字意见，不能直接改文件 —— 这是刻意设计的边界。
 - 打断后最多等你 `humanWaitMs`（默认 10 分钟）；超时会返回 `paused`
   把控制权交回 DeepSeek，由它在对话里继续问你。
+  - 这个等待是**循环长轮询**实现的，单次请求不超过 `pollWindowMs`
+    （默认 55 秒）。服务端 `generic/council.py` 的 `MAX_WAIT_SECONDS = 60`
+    是硬上限、会静默截断，所以**不要把 `pollWindowMs` 设到 60 秒以上**；
+    走 nginx 时 `proxy_read_timeout` 默认也是 60 秒，要一起调小。
 - 本插件注册工具/提示词，改完需要**重启 dsh** 才生效。
+
+### `kimi-cli` 适配器会用到你真实的 Kimi 登录
+
+它直接调用 `kimi -p`，默认使用你的 `~/.kimi-code`。两个后果要知道：
+
+1. **令牌失效时，CLI 会把凭据文件清空**（实测：1540 字节 → 136 字节、
+   `expires_at: 0`），之后必须用 `kimi login` 重新授权。
+2. 如果你在别处（例如另一个 `KIMI_CODE_HOME`）复制并使用了同一份凭据，
+   OAuth 的 refresh token 通常是一次性轮换的，**两边会互相作废**。
+
+更稳的做法是给评审者一把独立的 API key（`openai-api` 适配器接 Moonshot
+开放平台），而不是共用你的交互式登录会话。
