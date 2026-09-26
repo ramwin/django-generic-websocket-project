@@ -39,5 +39,4 @@ urlpatterns = [
     path('ht/', CustomHealthCheckView.as_view(), name='health_check_home'),
     path('ht/<str:subset>/', CustomHealthCheckView.as_view(), name='health_check_subset'),
     path('ws/generic/', include("generic.urls")),
-    path('ws/pair/', include("generic.urls")),
 ]
