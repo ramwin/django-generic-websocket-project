@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 
-import { callClaudeApi, messagesEndpoint } from '../lib/adapters/claude-api.js';
+import { authHeaders, callClaudeApi, messagesEndpoint } from '../lib/adapters/claude-api.js';
 import { callKimiCli, stripBullet } from '../lib/adapters/kimi-cli.js';
 import { callOpenAiApi, chatEndpoint } from '../lib/adapters/openai-api.js';
 import { collectReviews, reviewWithParticipant } from '../lib/adapters/index.js';
@@ -270,4 +270,56 @@ test('summarizeReview 给出一句话摘要', () => {
     assert.equal(
         summarizeReview({ label: 'Claude', verdict: 'error', error: 'timeout' }),
         'Claude：调用失败（timeout）');
+});
+
+// ---------------------------------------------------------------- 鉴权风格
+
+test('authHeaders：默认用 x-api-key', () => {
+    assert.deepEqual(authHeaders({}, 'sk-1'), { 'x-api-key': 'sk-1' });
+    assert.deepEqual(authHeaders({ authStyle: 'api-key' }, 'sk-1'), { 'x-api-key': 'sk-1' });
+});
+
+test('authHeaders：authStyle=bearer 时改用 Authorization（中转/Claude Code 风格）', () => {
+    assert.deepEqual(authHeaders({ authStyle: 'bearer' }, 'sk-1'),
+        { Authorization: 'Bearer sk-1' });
+});
+
+test('claude-api：bearer 风格发出去的是 Authorization，且不带 x-api-key', async () => {
+    let seen = null;
+    const fetchImpl = async (url, init) => {
+        seen = init;
+        return jsonResponse({ content: [{ type: 'text', text: 'ok\nVERDICT: approve' }] });
+    };
+    await callClaudeApi({
+        prompt: 'x',
+        participant: {
+            baseUrl: 'https://relay.internal/anthropic',
+            model: 'deepseek-v4-pro[1m]',
+            apiKey: 'sk-1',
+            authStyle: 'bearer',
+        },
+        fetchImpl,
+    });
+    assert.equal(seen.headers.Authorization, 'Bearer sk-1');
+    assert.equal('x-api-key' in seen.headers, false);
+    // thinking 块要被忽略，只取 text
+    const result = await callClaudeApi({
+        prompt: 'x',
+        participant: { baseUrl: 'https://h', model: 'm', apiKey: 'k', authStyle: 'bearer' },
+        fetchImpl: async () => jsonResponse({
+            content: [{ type: 'thinking', thinking: '想一下' }, { type: 'text', text: '答案' }],
+        }),
+    });
+    assert.equal(result.text, '答案');
+});
+
+test('claude-api：缺 key 时的报错要提到 apiKeyFile 这条出路', async () => {
+    await assert.rejects(
+        () => callClaudeApi({
+            prompt: 'x',
+            participant: { baseUrl: 'https://h', model: 'm', apiKeyEnv: 'ANTHROPIC_AUTH_TOKEN' },
+            fetchImpl: async () => jsonResponse({}),
+            env: {},
+        }),
+        /apiKeyFile.*ANTHROPIC_AUTH_TOKEN/s);
 });

@@ -19,6 +19,23 @@ export function messagesEndpoint(baseUrl) {
 }
 
 /**
+ * 按配置挑一种鉴权头。
+ *
+ * Anthropic 官方用 `x-api-key`，但很多中转（以及 Claude Code 自己配的
+ * `ANTHROPIC_AUTH_TOKEN`）用的是 `Authorization: Bearer`。两种都得支持，
+ * 否则接上中转会被判成「没配 key」。
+ *
+ * @param {object} participant 参与者配置。
+ * @param {string} apiKey 已解析出的 key。
+ * @returns {Record<string,string>} 请求头片段。
+ */
+export function authHeaders(participant, apiKey) {
+    return (participant.authStyle ?? 'api-key') === 'bearer'
+        ? { Authorization: `Bearer ${apiKey}` }
+        : { 'x-api-key': apiKey };
+}
+
+/**
  * 调用 Anthropic Messages API。
  *
  * @param {object} options 调用参数。
@@ -43,7 +60,8 @@ export async function callClaudeApi({
     const apiKey = resolveApiKey(participant, env);
     if (apiKey === '') {
         throw new Error(
-            `没有找到 API key：请在配置里写 apiKey，或设置环境变量 `
+            '没有找到 API key：请在配置里写 apiKey、用 apiKeyFile 指向一个'
+            + '含该变量的文件（ssh 的 bashrc 片段也行），或设置环境变量 '
             + `${participant.apiKeyEnv || 'ANTHROPIC_API_KEY'}`);
     }
     const payload = {
@@ -58,7 +76,7 @@ export async function callClaudeApi({
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
-            'x-api-key': apiKey,
+            ...authHeaders(participant, apiKey),
             'anthropic-version': participant.anthropicVersion ?? '2023-06-01',
             ...(participant.headers ?? {}),
         },

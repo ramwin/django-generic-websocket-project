@@ -28,7 +28,8 @@
         pollWindowMs: 55000
 
         # 单个模型评审的超时时间。
-        reviewTimeoutMs: 180000
+        # Kimi（思考模式 + 长计划）实测会超过 3 分钟，给足余量。
+        reviewTimeoutMs: 480000
 
         # 参与评审的异模型。
         #
@@ -36,9 +37,14 @@
         #   注意：它直接使用你真实的 ~/.kimi-code。令牌失效时 CLI 会把凭据
         #   清空，所以这里跑失败之后要用 `kimi login` 重新授权。
         #
-        # claude 只是「Anthropic 协议」这个接口的名字；下面这套配置实际指向
-        #   DeepSeek 的 Anthropic 兼容端点（与本机 ANTHROPIC_BASE_URL 一致）。
-        #   baseUrl / apiKeyEnv / model 都可替换，换成真 Claude 或任何中转。
+        # claude 只是「Anthropic 协议」这个适配器的名字，不是模型名。
+        #   下面这套指向 DeepSeek 的 Anthropic 兼容端点（与本机
+        #   ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN 一致），已实测 HTTP 200：
+        #   - 鉴权是 `Authorization: Bearer`（authStyle: bearer），不是 x-api-key；
+        #   - DSH 进程未必继承你 shell 里的 export，所以用 apiKeyFile 直接指向
+        #     那个 rc 文件，按 apiKeyEnv 给的名字去里面找（支持 ~ 展开）。
+        #   接真 Claude 就改成 baseUrl: https://api.anthropic.com、
+        #   apiKeyEnv: ANTHROPIC_API_KEY、authStyle: api-key，并去掉 apiKeyFile。
         participants:
           kimi:
             adapter: kimi-cli
@@ -47,6 +53,8 @@
             adapter: claude-api
             label: DeepSeek（Anthropic 接口）
             baseUrl: https://api.deepseek.com/anthropic
-            apiKeyEnv: DEEPSEEK_API_KEY
-            model: deepseek-chat
+            apiKeyEnv: ANTHROPIC_AUTH_TOKEN
+            apiKeyFile: ~/github/secret/bashrc
+            authStyle: bearer
+            model: deepseek-v4-pro[1m]
             maxTokens: 4096

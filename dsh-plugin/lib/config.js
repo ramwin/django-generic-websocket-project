@@ -7,6 +7,10 @@
  * @module dsh-plugin-ai-council/config
  */
 
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 /** 支持的适配器类型。 */
 export const ADAPTER_KINDS = ['kimi-cli', 'claude-api', 'openai-api'];
 
@@ -34,6 +38,12 @@ export const DEFAULT_PARTICIPANTS = {
         baseUrl: 'https://api.anthropic.com',
         apiKeyEnv: 'ANTHROPIC_API_KEY',
         apiKey: '',
+        // 进程环境里没有这个变量时，去这个文件里按 apiKeyEnv 找
+        // （支持 `export NAME=value` 这种 shell 片段）
+        apiKeyFile: '',
+        // 'api-key' → x-api-key（Anthropic 官方）；'bearer' → Authorization: Bearer
+        // （Claude Code 的 ANTHROPIC_AUTH_TOKEN、以及多数中转都用这种）
+        authStyle: 'api-key',
         model: 'claude-sonnet-4-5',
         maxTokens: 4096,
         anthropicVersion: '2023-06-01',
@@ -62,7 +72,9 @@ export const DEFAULTS = {
     // 建议没人接）。放在配置里是因为它取决于中间层：nginx 的
     // proxy_read_timeout 默认也是 60 秒，走 nginx 时应该调得更小。
     pollWindowMs: 55_000,
-    reviewTimeoutMs: 180_000,
+    // 单个模型评审的超时。Kimi 开着思考模式、又要把长计划读完，
+    // 实测 130 秒能回来、180 秒也会超时，所以默认给足 8 分钟。
+    reviewTimeoutMs: 480_000,
     requestTimeoutMs: 30_000,
     promptSectionOrder: 118,
     transcriptLimit: 40,
@@ -139,15 +151,93 @@ export function selectParticipants(config, names) {
 }
 
 /**
- * 解析 API key：显式写的优先，否则读环境变量。
+ * 从一个文件里取出 API key。
+ *
+ * 支持两种格式：
+ * 1. **shell 环境文件**（推荐）：按 ``apiKeyEnv`` 给的名字找
+ *    ``NAME=value`` / ``export NAME=value`` / ``NAME="value"`` 那一行。
+ *    这样可以直接指向 ``~/.bashrc`` 片段或 ``secret/bashrc`` 这类文件，
+ *    不必为了插件去改系统的环境变量。
+ * 2. **纯 key 文件**：整份内容就是一个 key（Docker secret 那种）。
+ *
+ * 为什么需要它：DSH 进程未必继承到你 shell 里的那些 export（例如
+ * ``ANTHROPIC_AUTH_TOKEN``），而插件也没法替你 source 一个 rc 文件。
+ *
+ * @param {string} path 文件路径。
+ * @param {string} [name] 变量名；给了就按名字找，找不到再退化成整份内容。
+ * @param {Function} [readFile] 便于测试注入。
+ * @returns {string} key，取不到时为空串。
+ */
+export function readApiKeyFile(path, name, readFile = readFileSync) {
+    if (typeof path !== 'string' || path.trim() === '') {
+        return '';
+    }
+    let content;
+    try {
+        content = String(readFile(expandHome(path), 'utf8'));
+    } catch {
+        return '';
+    }
+    if (typeof name === 'string' && name !== '') {
+        const pattern = new RegExp(
+            `^\\s*(?:export\\s+)?${name}\\s*=\\s*(.*)$`, 'm');
+        const matched = content.match(pattern);
+        if (matched !== null) {
+            return stripQuotes(matched[1]);
+        }
+        return '';
+    }
+    const trimmed = content.trim();
+    if (trimmed === '' || trimmed.includes('\n') || trimmed.includes('=')) {
+        return '';
+    }
+    return stripQuotes(trimmed);
+}
+
+/** 展开开头的 `~`，这样配置里不用硬编码用户名。 */
+export function expandHome(path) {
+    const value = String(path ?? '');
+    if (value === '~') {
+        return homedir();
+    }
+    if (value.startsWith('~/')) {
+        return join(homedir(), value.slice(2));
+    }
+    return value;
+}
+
+/** 去掉 shell 里常见的包裹引号。 */
+function stripQuotes(value) {
+    const trimmed = String(value ?? '').trim();
+    if (trimmed.length >= 2
+        && ((trimmed.startsWith('"') && trimmed.endsWith('"'))
+            || (trimmed.startsWith("'") && trimmed.endsWith("'")))) {
+        return trimmed.slice(1, -1);
+    }
+    return trimmed;
+}
+
+/**
+ * 解析 API key。
+ *
+ * 顺序：显式写的 ``apiKey`` → ``apiKeyFile`` 里按 ``apiKeyEnv`` 找 →
+ * 环境变量 ``apiKeyEnv``。
  *
  * @param {object} participant 参与者配置。
  * @param {Record<string, string|undefined>} [env] 环境变量表。
+ * @param {Function} [readFile] 便于测试注入。
  * @returns {string} API key，取不到时为空串。
  */
-export function resolveApiKey(participant, env = process.env) {
+export function resolveApiKey(participant, env = process.env, readFile = readFileSync) {
     if (typeof participant.apiKey === 'string' && participant.apiKey.trim() !== '') {
         return participant.apiKey.trim();
+    }
+    if (typeof participant.apiKeyFile === 'string' && participant.apiKeyFile.trim() !== '') {
+        const fromFile = readApiKeyFile(
+            participant.apiKeyFile, participant.apiKeyEnv, readFile);
+        if (fromFile !== '') {
+            return fromFile;
+        }
     }
     const envName = participant.apiKeyEnv;
     if (typeof envName === 'string' && envName !== '' && typeof env[envName] === 'string') {

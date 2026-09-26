@@ -44,7 +44,8 @@ export async function callOpenAiApi({
     const apiKey = resolveApiKey(participant, env);
     if (apiKey === '') {
         throw new Error(
-            `没有找到 API key：请在配置里写 apiKey，或设置环境变量 `
+            '没有找到 API key：请在配置里写 apiKey、用 apiKeyFile 指向一个'
+            + '含该变量的文件，或设置环境变量 '
             + `${participant.apiKeyEnv || '(未指定 apiKeyEnv)'}`);
     }
     const messages = [];
