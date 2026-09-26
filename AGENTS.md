@@ -7,8 +7,9 @@
 一个基于 **Django + Django Channels** 的通用 WebSocket 实时消息推送服务模板。核心模式：**外部系统通过 HTTP API 向指定"房间"广播消息，所有订阅该房间的 WebSocket 客户端实时收到**。默认用内存 channel layer，单进程即可跑、不需要 Redis；多实例（`CHANNEL_LAYER_BACKEND=redis`）通过 Redis Channel Layer 共享状态，可水平扩展。
 
 - 作者：Xiang Wang <ramwin@qq.com>，MIT License
-- 无业务持久化模型（`generic/models.py`、`admin.py`、`tests.py` 均为空占位），Django 仅作为 ASGI/WebSocket 框架 + 管理后台 + 健康检查使用
-- 数据库仅用于 Django 自带的 auth/session/admin，默认 sqlite3（`db.sqlite3`）
+- 业务持久化模型只有 **AI 会议室**两张表（`generic/models.py` 的 `CouncilSession` / `CouncilMessage`）；`admin.py` 仍是空占位，`tests.py` 已改成真正的单元测试
+- 数据库默认 sqlite3（`db.sqlite3`）：除 Django 自带的 auth/session/admin 外，还存会议室会话与消息
+- 仓库里还带了一个可选组件 **`dsh-plugin/`（AI Council）**：把本项目当成多方（DeepSeek / Kimi / Claude / 人类）共享的评审通道，供 DeepSeek Harness 调用。**它不影响项目本身的独立部署**——插件只是本项目 HTTP 接口的一个客户端
 
 ## 二、技术栈与关键依赖
 
@@ -46,12 +47,30 @@ generic/                  # 唯一业务应用
   urls.py                 # HTTP 子路由：send-message/<slug:room_name>/、room/<room_name>/
   templates/generic/room.html  # 浏览器端会话查看页面（HTML + 内联 JS，参考 channels 官方教程 chat/room.html）
   backends.py             # MyHealthCheck：自定义 Redis 内存健康检查（memory 后端下自动跳过）
-  models.py/admin.py/tests.py  # 空占位
-  migrations/             # 仅 __init__.py，无业务迁移
+  models.py               # CouncilSession / CouncilMessage：AI 会议室（唯一有业务模型的模块）
+  council.py              # AI 会议室服务层：分配 seq、落库、复用 channel layer 广播、长轮询
+  council_views.py        # AI 会议室 HTTP 接口 + 人类动作接口 + 会议室页面视图
+  council_urls.py         # AI 会议室路由，挂在 /ws/generic/council/ 下
+  templates/generic/council.html  # AI 会议室页面：消息流 + 3 秒人工打断条
+  tests.py                # 30 项单元测试：会议室接口 + 原有 HTTP/WS 能力回归
+  admin.py                # 空占位
+  migrations/             # 0001_initial.py：会议室两张表
 
 tests/                    # 端到端冒烟测试脚本（CLI 工具，非单元测试）
   test_send_message.py    # click CLI：HTTP POST 发消息到房间
   test_receive_message.py # click CLI：WebSocket 客户端订阅房间
+  council_smoke.py        # click CLI：AI 会议室全链路冒烟（含并发 seq 校验）
+  council_multiprocess_smoke.sh  # 多实例 + redis channel layer 冒烟（生产部署形态）
+  council_page.test.mjs   # 会议室页面内联 JS 的测试（最小 DOM 桩，13 项）
+
+dsh-plugin/               # DeepSeek Harness 插件：AI Council（见 dsh-plugin/README.md）
+  package.json            # 插件包声明，dsh.bundle.patch 指向 cordis.patch.yml
+  cordis.patch.yml        # 把插件挂进 profile 的 host 组合（含默认配置）
+  lib/                    # 纯 ESM，无构建步骤；只有 index.js/tools.js 依赖 DSH
+  test/                   # 88 项单元测试，node --test，不需要 DSH
+  scripts/verify-dsh-mount.sh  # 验证 DSH 能否装载本插件（一次性 DSH home，可重复跑）
+  scripts/e2e-demo.mjs    # 端到端演示：真服务 + 真 3 秒 + 真 Kimi
+  scripts/live-check.mjs  # 链路自检：插件 ↔ 真实服务（模型换成桩，不耗额度）
 
 deploy/
   supervisor.conf         # 3 个 Daphne 实例（端口 57420/57421/57422）
@@ -115,6 +134,41 @@ HTTP POST /ws/generic/send-message/<room_name>/
 - `GET /ht/`（及 `/ht/<subset>/`）走 `CustomHealthCheckView`，含 Cache/Database/DNS/Mail/Storage + 自定义 `MyHealthCheck`。
 - `generic/backends.py` 的 `MyHealthCheck`：Redis `used_memory_rss` 或 `used_memory` 超过 1GiB 时抛 `ServiceUnavailable`。
 
+### AI 会议室（council，本仓库新增的第二个能力）
+
+在原有「广播」能力之上加了一层**持久化的多方评审通道**：DeepSeek（编码代理）、
+Kimi / Claude（异模型）、人类三方把发言都投进同一个房间。
+
+**一句话设计**：会议室里的一切都是消息。没有额外的状态机——「人类打断」
+就是一条 `role="interrupt"` 的消息，「3 秒窗口关闭」就是一条
+`role="human_window_close"` 的消息。这样它既能被 WebSocket 实时推送，
+也能被 HTTP 长轮询可靠取回，还能完整回放。
+
+```
+POST /ws/generic/council/sessions/<sid>/messages/   ← 发言（模型/系统）
+POST /ws/generic/council/sessions/<sid>/human/      ← 人类动作：interrupt/resume/suggest/note
+GET  /ws/generic/council/sessions/<sid>/messages/   ← 拉增量，支持 ?after=&wait=&roles= 长轮询
+GET  /ws/generic/council/room/<sid>/                ← 会议室页面（含 3 秒打断条）
+        │
+        └─► council.broadcast() ──► channel_layer.group_send(sid, ...) ──► ChatConsumer ──► 页面 / 插件
+```
+
+- `sid`（session_id）**同时就是房间名**，必须匹配 `\w+`——`council_urls.py` 和 `routing.py`
+  用的是同一套正则，就是为了避免「页面能打开但 WebSocket 连不上」。
+- `seq` 的分配**不能**用 `select_for_update()`：项目默认 sqlite 不支持 `SELECT ... FOR UPDATE`，
+  会直接抛 `NotSupportedError`。改用 `UPDATE ... SET next_seq = next_seq + 1` 的原子自增
+  （见 `council.post_message`）。
+- 会议室消息复用**原有**的 `channel_layer.group_send` 原语，所以 `CHANNEL_LAYER_BACKEND=redis`
+  的多实例部署、原有 `room.html`、原有 `ChatConsumer` 全都不受影响。
+- 「3 秒人工打断窗口」的实现只有一个技巧：插件侧用一次
+  `GET ...?after=N&wait=3&roles=interrupt,resume,suggest` 的长轮询等这 3 秒。
+  有人打断就立刻返回，没人打断就超时返回。**不需要定时器，也不需要外部调度器。**
+- 房间名约束在 `council_views.SESSION_ID_PATTERN` 与会话创建校验里都做了，
+  自定义 `session_id` 必须满足 `\w+`。
+
+`dsh-plugin/` 是本仓库里的可选组件，通过上面这些**公开 HTTP 接口**与本服务交互，
+因此**本服务可以完全脱离 DSH 单独部署**（docker / supervisor / runserver 三种方式都不变）。
+
 ## 五、配置与环境变量
 
 `project/settings.py` 的加载顺序：`.env.shared` → `.env`（后者覆盖前者），均为 `dotenv_values` 读取的**文件**，然后 `CONFIG.get(...) or os.environ.get(...)`——**即 .env 文件优先级高于进程环境变量**。Docker 部署时若构建上下文里存在 `.env`，会被 `COPY ./ ./` 打入镜像并使 compose 注入的环境变量失效，需注意。
@@ -159,7 +213,18 @@ python tests/test_send_message.py --room room_123        # HTTP POST 发消息
 python tests/test_receive_message.py --room room_123 --auth token123   # WS 订阅收消息
 ```
 
-**测试策略说明**：本项目**没有单元测试框架与 CI**。`generic/tests.py` 是 Django 空占位；`tests/` 目录是人工跑的端到端 CLI 脚本（依赖 click/requests/websocket-client），其中 receive 脚本支持 `data.action == "raise"` 时主动抛错以模拟客户端异常。仓库里存在 `.mypy_cache`，说明用 mypy 做过类型检查，但无配置文件、未纳入标准流程。改动后请至少跑通上述冒烟流程验证。
+**测试策略说明**：本项目**没有 CI**，但现在有真正的单元测试。
+
+- `generic/tests.py` 是 Django 单元测试（30 项）：覆盖 AI 会议室接口、广播落组、路由，以及**原有 HTTP/WS 能力的回归**（原来的推送接口、房间页、`ChatConsumer` 收发、WS 路由正则）。跑法：`python manage.py test generic`。
+- `tests/` 目录是人工跑的端到端 CLI 脚本（依赖 click/requests/websocket-client），其中 receive 脚本支持 `data.action == "raise"` 时主动抛错以模拟客户端异常。`council_smoke.py` 是 AI 会议室的全链路冒烟（23 项，含**并发发言下 seq 不重号不漏号**），需要先起服务：`python tests/council_smoke.py --base-url http://localhost:7420`。
+- `tests/council_page.test.mjs` 是**会议室页面里那段内联 JS** 的测试（13 项）：用一个手写的最小 DOM 桩加载模板里真实的脚本，由测试驱动时间，覆盖 3 秒打断条的状态机（倒计时、窗口过期不误弹、打断来晚了不能假装循环停了、服务端关窗后暂停面板的去留）。**不引入 jsdom**，跑法：`node --test tests/council_page.test.mjs`。
+- `tests/council_multiprocess_smoke.sh` 验**生产部署形态**（9 项）：切到 `CHANNEL_LAYER_BACKEND=redis`、同时起两个 Daphne 实例共享同一个 sqlite，然后检查跨实例广播（WS 连 A、HTTP 打到 B 要能收到）、跨进程并发写 sqlite 不报 `database is locked`、多进程下 seq 仍唯一连续。**这一点很重要**：改动之前这个项目运行期几乎不写库，而会议室每句话都要写，是**新引入**的并发面。需要本机有 redis，没有就跳过。脚本把 settings 覆盖写在临时目录里，**不动仓库文件**。
+- `dsh-plugin/test/` 是插件的单元测试（88 项），用假会议室 + 假模型，**不需要 DSH 也不需要网络**，跑法：`cd dsh-plugin && node --test test/`。其中 `test/output-contract.test.mjs` 用 **DSH 自己的 `validateJsonSchemaValue`** 校验每个工具在每个分支上的真实返回值——因为 DSH 管道会按 `output.schema` 校验工具输出，而直接调 `execute` 是绕过校验的，「本地全绿、装进 DSH 就炸」就是这样来的。
+- `dsh-plugin/scripts/live-check.mjs` 是**插件 ↔ 真实会议室服务**的链路自检（17 项，模型换成桩、不消耗任何额度），需要先起服务：`node dsh-plugin/scripts/live-check.mjs --bus-url http://localhost:7420`。
+- `dsh-plugin/scripts/verify-dsh-mount.sh` 验证 **DSH 能不能装载这个插件**（9 项）：靠 `DSH_HOME` 指向临时目录造一个一次性 DSH home，从 shipped 模板建 profile、把插件挂成 bundle，再逐个检查 `--dump-config`（组合器认不认）、`--dump-config-schema`（能不能导入模块读 schema）、`--help`（profile 能不能启动，即 `apply()` 会不会抛）。**不会碰用户自己的 `~/.dsh`。**
+- `dsh-plugin/scripts/e2e-demo.mjs` 是插件侧的端到端演示（真服务 + 真 3 秒 + 真 Kimi）。
+
+仓库里存在 `.mypy_cache`，说明用 mypy 做过类型检查，但无配置文件、未纳入标准流程。改动后请至少跑通上述流程验证。
 
 ## 七、部署
 
@@ -196,3 +261,10 @@ python tests/test_receive_message.py --room room_123 --auth token123   # WS 订�
 | 新增 WS 路由 | `generic/routing.py` + 新 consumer（仿照 `ChatConsumer`） |
 | 调整健康检查 | `generic/backends.py`（继承 `HealthCheck` dataclass，实现 `run()`） |
 | 调整日志 | `project/logging_settings.py` |
+| 改会议室的消息/接口 | `generic/council.py`（服务层）+ `council_views.py`（HTTP）+ `council_urls.py`（路由） |
+| 改会议室页面 / 打断条 | `generic/templates/generic/council.html` + `council_views.CouncilRoomView` |
+| 给会议室加业务字段 | `generic/models.py` + `python manage.py makemigrations generic` |
+| 加一个新的评审模型（GLM/Qwen/…） | 只改 `dsh-plugin/cordis.patch.yml` 的 `participants`，通常不用写代码 |
+| 加一种新的模型接入协议 | `dsh-plugin/lib/adapters/` 新增一个文件 + 在 `adapters/index.js` 注册 |
+| 改 3 秒窗口/等待时长 | `dsh-plugin/cordis.patch.yml` 的 `humanWindowMs` / `humanWaitMs` |
+| 改「什么时候唤醒插件」 | `dsh-plugin/lib/usage.js`（注入 system prompt 的说明） |

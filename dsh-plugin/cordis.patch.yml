@@ -1,0 +1,40 @@
+# dsh-plugin-ai-council 的 bundle patch。
+#
+# 把插件挂进 dsh profile 的 host 组合：工具注册进共享的 tools 注册表，
+# 用法说明注册进全局 system prompt，所以任何会话都能用自然语言唤醒它
+# （例如「用 AI 审批 + 人工审批流程做 X」）。
+#
+# 安装：dsh plugin --profile <name> add <这个目录>
+- insert:
+    - id: ai-council
+      name: 'dsh-plugin-ai-council'
+      config:
+        # django-generic-websocket-project 的地址。
+        # 这个服务可以完全脱离 DSH 单独部署（docker / supervisor / runserver）。
+        busUrl: http://127.0.0.1:7420
+
+        # AI 反馈之后留给人类的打断窗口，单位毫秒。
+        humanWindowMs: 3000
+
+        # 人类按下「打断」之后，愿意等他慢慢看、再决定「恢复循环」还是
+        # 「加入建议」的最长时间，单位毫秒。超时后工具会把控制权交还给
+        # DeepSeek，由它在对话里继续问你。
+        humanWaitMs: 600000
+
+        # 单个模型评审的超时时间。
+        reviewTimeoutMs: 180000
+
+        # 参与评审的异模型。
+        # kimi 走本机已登录的 kimi CLI（Kimi For Coding 订阅，无需 API key）。
+        # claude 走 Anthropic Messages API —— baseUrl / apiKeyEnv / model
+        # 都可替换，方便接入别人的中转或换个模型。
+        participants:
+          kimi:
+            adapter: kimi-cli
+            label: Kimi
+          claude:
+            adapter: claude-api
+            label: Claude
+            baseUrl: https://api.anthropic.com
+            apiKeyEnv: ANTHROPIC_API_KEY
+            model: claude-sonnet-4-5

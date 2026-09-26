@@ -1,0 +1,518 @@
+{% comment %}
+AI 会议室（council）页面 —— 人类参与那个环节。
+
+访问方式：/ws/generic/council/room/<session_id>/
+
+页面做四件事：
+    1. 用 WebSocket 订阅房间 /ws/generic/<session_id>/ ，实时看到
+       DeepSeek / Kimi / Claude 的每一步（计划、编码、执行、评价、评审）；
+    2. 模型给完意见后，屏幕下方会弹出 3 秒倒计时条 —— 这几秒里你可以
+       点「打断」把循环停下来慢慢看；
+    3. 打断之后你可以选「恢复循环」或者「加入我的建议」；
+    4. 也可以随时在底部输入框里留言，广播给所有参与者。
+
+会话 ID 同时就是房间名，所以这个页面和项目原有的
+/ws/generic/room/<room_name>/ 走的是同一套 WebSocket 广播机制。
+{% endcomment %}<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>AI 会议室 {{ session_id }}</title>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; padding: 16px; height: 100vh;
+            display: flex; flex-direction: column; gap: 12px;
+            background: #f5f6f8; color: #1f2328;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+        h1 { margin: 0; font-size: 18px; font-weight: 600; }
+        code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+        code { padding: 1px 6px; border-radius: 4px; background: #eaecef; font-size: 13px; }
+        .pill { padding: 4px 12px; border-radius: 999px; background: #e2e5e9; font-size: 13px; }
+        #status.connecting { background: #fff3cd; }
+        #status.open { background: #d6f5dd; }
+        #status.closed, #status.error { background: #ffd9d9; }
+        #task { flex-basis: 100%; font-size: 13px; color: #4b5563; }
+        #chat-log {
+            flex: 1; overflow-y: auto; padding: 12px;
+            border: 1px solid #d8dce1; border-radius: 8px; background: #fff;
+        }
+        .message { padding: 8px 10px; border-radius: 8px; border-left: 4px solid #d8dce1; background: #fbfbfc; }
+        .message + .message { margin-top: 8px; }
+        .message .meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: #6b7280; }
+        .message .who { font-weight: 600; font-size: 13px; }
+        .message .body { margin: 6px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; }
+        .message .extra { margin-top: 6px; }
+        .message .extra summary { cursor: pointer; font-size: 12px; color: #6b7280; }
+        .message .extra pre { margin: 6px 0 0; padding: 8px; overflow-x: auto; font-size: 12px;
+                              border: 1px solid #e5e7eb; border-radius: 6px; background: #fff; }
+        .message.sender-deepseek { border-left-color: #2563eb; background: #f2f6ff; }
+        .message.sender-kimi { border-left-color: #7c3aed; background: #f7f3ff; }
+        .message.sender-claude { border-left-color: #d97706; background: #fff8ec; }
+        .message.sender-human { border-left-color: #059669; background: #f0fdf6; }
+        .message.sender-system { border-left-color: #9ca3af; background: #fafafa; color: #6b7280; }
+        .message.sender-review { border-left-color: #7c3aed; }
+        .chip { padding: 1px 8px; border-radius: 999px; background: #e5e7eb; }
+        .chip.role { background: #dbeafe; color: #1d4ed8; }
+        .chip.step { background: #ede9fe; color: #5b21b6; }
+
+        /* 3 秒人工打断窗口 */
+        #interrupt-bar {
+            display: none; padding: 12px; border-radius: 10px;
+            border: 2px solid #f59e0b; background: #fffbeb;
+        }
+        #interrupt-bar.active { display: block; }
+        #interrupt-bar.paused { border-color: #2563eb; background: #eff6ff; }
+        .bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+        .bar-title { font-weight: 600; font-size: 14px; }
+        #countdown { font-family: ui-monospace, monospace; font-size: 20px; font-weight: 700; color: #b45309; }
+        #countdown-track { flex: 1; min-width: 120px; height: 8px; border-radius: 999px; background: #fde68a; overflow: hidden; }
+        #countdown-fill { height: 100%; width: 100%; background: #f59e0b; transition: width 100ms linear; }
+        #suggest-box { display: none; margin-top: 10px; }
+        #suggest-box textarea {
+            width: 100%; min-height: 70px; padding: 8px 10px; font-size: 13px;
+            border: 1px solid #d8dce1; border-radius: 8px; resize: vertical;
+            font-family: inherit;
+        }
+        .composer { display: flex; gap: 8px; }
+        .composer input {
+            flex: 1; padding: 10px 12px; font-size: 14px;
+            border: 1px solid #d8dce1; border-radius: 8px;
+        }
+        button {
+            padding: 9px 16px; font-size: 14px; cursor: pointer;
+            border: 0; border-radius: 8px; background: #2563eb; color: #fff;
+        }
+        button.secondary { background: #e5e7eb; color: #1f2328; }
+        button.warn { background: #f59e0b; }
+        button.ok { background: #059669; }
+        button:disabled { opacity: .5; cursor: not-allowed; }
+        .hint { font-size: 12px; color: #6b7280; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>AI 会议室：<code>{{ session_id }}</code></h1>
+        <span id="status" class="pill connecting">连接中…</span>
+        <span id="round" class="pill">第 0 轮</span>
+        <span style="flex: 1"></span>
+        <button id="chat-clear" class="secondary" type="button">清空显示</button>
+        <div id="task"></div>
+    </header>
+
+    <div id="chat-log" aria-live="polite"></div>
+
+    <div id="interrupt-bar">
+        <div class="bar-row" id="bar-waiting">
+            <span class="bar-title">模型已给出意见，</span>
+            <span id="countdown">3.0</span>
+            <span class="bar-title">秒后自动继续。</span>
+            <div id="countdown-track"><div id="countdown-fill"></div></div>
+            <button id="btn-interrupt" class="warn" type="button">打断，我要慢慢看</button>
+        </div>
+        <div class="bar-row" id="bar-paused" style="display:none">
+            <span class="bar-title">⏸ 循环已暂停，等你决定：</span>
+            <button id="btn-resume" class="ok" type="button">恢复循环</button>
+            <button id="btn-suggest" class="secondary" type="button">加入我的建议</button>
+        </div>
+        <div id="suggest-box">
+            <textarea id="suggest-text" placeholder="写下你的建议，它会被注入到下一轮循环里…"></textarea>
+            <div class="bar-row" style="margin-top:8px">
+                <button id="btn-suggest-send" type="button">提交建议并继续</button>
+                <button id="btn-suggest-cancel" class="secondary" type="button">取消</button>
+                <span class="hint">提交后会作为人类消息广播给 DeepSeek / Kimi / Claude。</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="composer">
+        <input id="chat-message-input" type="text" autocomplete="off"
+               placeholder="随时留言（广播给房间内所有参与者，回车发送）"/>
+        <button id="chat-message-submit" type="button">留言</button>
+    </div>
+
+    {{ session_id|json_script:"session-id" }}
+    {{ session_url|json_script:"session-url" }}
+    {{ messages_url|json_script:"messages-url" }}
+    {{ human_url|json_script:"human-url" }}
+
+    <script>
+        (function () {
+            "use strict";
+
+            const sessionId = JSON.parse(document.getElementById("session-id").textContent);
+            const sessionUrl = JSON.parse(document.getElementById("session-url").textContent);
+            const messagesUrl = JSON.parse(document.getElementById("messages-url").textContent);
+            const humanUrl = JSON.parse(document.getElementById("human-url").textContent);
+
+            const logElement = document.getElementById("chat-log");
+            const statusElement = document.getElementById("status");
+            const roundElement = document.getElementById("round");
+            const taskElement = document.getElementById("task");
+            const inputElement = document.getElementById("chat-message-input");
+
+            const bar = document.getElementById("interrupt-bar");
+            const barWaiting = document.getElementById("bar-waiting");
+            const barPaused = document.getElementById("bar-paused");
+            const countdownElement = document.getElementById("countdown");
+            const countdownFill = document.getElementById("countdown-fill");
+            const suggestBox = document.getElementById("suggest-box");
+            const suggestText = document.getElementById("suggest-text");
+
+            const token = new URLSearchParams(window.location.search).get("token");
+
+            let socket = null;
+            let retryCount = 0;
+            let reconnectTimer = null;
+            let latestSeq = 0;
+            let windowTimer = null;
+            let windowState = "idle";        // idle | waiting | paused
+            let windowOpen = false;          // 倒计时是否正在跑
+            let lastInterruptAt = 0;         // 我刚点过打断的时刻，用来忽略自己那条广播
+            const seenSeq = new Set();
+
+            function setStatus(kind, text) {
+                statusElement.className = "pill " + kind;
+                statusElement.textContent = text;
+            }
+
+            function websocketUrl() {
+                const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+                let url = scheme + "://" + window.location.host
+                    + "/ws/generic/" + encodeURIComponent(sessionId) + "/";
+                if (token) { url += "?token=" + encodeURIComponent(token); }
+                return url;
+            }
+
+            const SENDER_LABELS = {
+                deepseek: "DeepSeek", kimi: "Kimi", claude: "Claude",
+                human: "我", system: "系统"
+            };
+            const ROLE_LABELS = {
+                task: "任务", plan: "计划", coding: "编码", execute: "执行",
+                evaluate: "评价", review: "评审", note: "留言",
+                interrupt: "打断", resume: "恢复循环", suggest: "人类建议",
+                human_window_open: "等待人工确认", human_window_close: "人工窗口关闭",
+                system: "系统"
+            };
+
+            function senderClass(event) {
+                if (event.role === "review") { return "sender-review"; }
+                return "sender-" + (SENDER_LABELS[event.sender] ? event.sender : "system");
+            }
+
+            function appendMessage(event) {
+                if (typeof event.seq === "number") {
+                    if (seenSeq.has(event.seq)) { return; }
+                    seenSeq.add(event.seq);
+                    latestSeq = Math.max(latestSeq, event.seq);
+                }
+                const row = document.createElement("div");
+                row.className = "message " + senderClass(event);
+
+                const meta = document.createElement("div");
+                meta.className = "meta";
+                const who = document.createElement("span");
+                who.className = "who";
+                who.textContent = SENDER_LABELS[event.sender] || event.sender;
+                meta.appendChild(who);
+                if (event.seq) {
+                    const seqChip = document.createElement("span");
+                    seqChip.className = "chip";
+                    seqChip.textContent = "#" + event.seq;
+                    meta.appendChild(seqChip);
+                }
+                if (event.role) {
+                    const roleChip = document.createElement("span");
+                    roleChip.className = "chip role";
+                    roleChip.textContent = ROLE_LABELS[event.role] || event.role;
+                    meta.appendChild(roleChip);
+                }
+                if (event.step) {
+                    const stepChip = document.createElement("span");
+                    stepChip.className = "chip step";
+                    stepChip.textContent = event.step;
+                    meta.appendChild(stepChip);
+                }
+                if (event.at) {
+                    const time = document.createElement("span");
+                    time.textContent = new Date(event.at).toLocaleTimeString();
+                    meta.appendChild(time);
+                }
+                row.appendChild(meta);
+
+                if (event.content) {
+                    const body = document.createElement("pre");
+                    body.className = "body";
+                    body.textContent = event.content;
+                    row.appendChild(body);
+                }
+                if (event.payload && Object.keys(event.payload).length > 0) {
+                    const details = document.createElement("details");
+                    details.className = "extra";
+                    const summary = document.createElement("summary");
+                    summary.textContent = "结构化数据";
+                    const pre = document.createElement("pre");
+                    pre.textContent = JSON.stringify(event.payload, null, 2);
+                    details.appendChild(summary);
+                    details.appendChild(pre);
+                    row.appendChild(details);
+                }
+                logElement.appendChild(row);
+                logElement.scrollTop = logElement.scrollHeight;
+            }
+
+            function appendNotice(text) {
+                appendMessage({ sender: "system", role: "system", content: text });
+            }
+
+            // ---------- 3 秒人工打断窗口 ----------
+
+            // 「窗口开着、倒计时在跑」和「循环已暂停」是两个独立状态：
+            // 窗口关了不等于暂停面板要收起（打断后关窗时正相反）。
+            function openHumanWindow(event) {
+                const deadlineMs = Number((event.payload && event.payload.deadline_ms) || 3000);
+                // 用**服务端**的时间戳算截止时刻，而不是「页面收到的时刻」。
+                // 否则页面显示的剩余时间会比服务端真实窗口更长，用户会以为
+                // 自己还能打断，其实循环已经往下走了。
+                const postedAt = event.at ? Date.parse(event.at) : Date.now();
+                const base = Number.isFinite(postedAt) ? postedAt : Date.now();
+                const deadlineAt = base + deadlineMs;
+                window.clearInterval(windowTimer);
+                if (deadlineAt - Date.now() <= 0) {
+                    // 历史回放，或者广播延迟太久：这个窗口其实早就关了
+                    windowOpen = false;
+                    return;
+                }
+                windowOpen = true;
+                windowState = "waiting";
+                bar.className = "active";
+                barWaiting.style.display = "flex";
+                barPaused.style.display = "none";
+                suggestBox.style.display = "none";
+                windowTimer = window.setInterval(function () {
+                    const left = Math.max(0, deadlineAt - Date.now());
+                    countdownElement.textContent = (left / 1000).toFixed(1);
+                    countdownFill.style.width = (100 * left / deadlineMs) + "%";
+                    if (left <= 0) {
+                        window.clearInterval(windowTimer);
+                        windowOpen = false;
+                        windowState = "idle";
+                        bar.className = "";
+                        barWaiting.style.display = "none";
+                        appendNotice("3 秒内没有人打断，循环已自动继续。");
+                    }
+                }, 100);
+            }
+
+            function markWindowClosed(event) {
+                const outcome = (event.payload && event.payload.outcome) || "timeout";
+                window.clearInterval(windowTimer);
+                windowOpen = false;
+                barWaiting.style.display = "none";
+                if (outcome === "paused") {
+                    // 人类打断后服务端关了窗：暂停面板要继续留着等他决定
+                    enterPaused();
+                    return;
+                }
+                if (outcome === "aborted") {
+                    appendNotice("人工窗口异常关闭，这一轮没等到人工结论。");
+                }
+                windowState = "idle";
+                bar.className = "";
+                barPaused.style.display = "none";
+                suggestBox.style.display = "none";
+            }
+
+            function enterPaused() {
+                windowOpen = false;
+                windowState = "paused";
+                window.clearInterval(windowTimer);
+                bar.className = "active paused";
+                barWaiting.style.display = "none";
+                barPaused.style.display = "flex";
+            }
+
+            function handleEvent(event) {
+                if (!event || event.council !== true) {
+                    // 兼容项目原有的 {"message": "..."} 推送格式
+                    appendMessage({ sender: "system", role: "note",
+                                    content: typeof event === "string" ? event : JSON.stringify(event, null, 2) });
+                    return;
+                }
+                appendMessage(event);
+                if (event.session_id && event.session_id !== sessionId) { return; }
+                if (event.role === "human_window_open") { openHumanWindow(event); }
+                else if (event.role === "human_window_close") { markWindowClosed(event); }
+                else if (event.role === "interrupt") {
+                    if (windowOpen) {
+                        enterPaused();
+                    } else if (Date.now() - lastInterruptAt > 5000) {
+                        // 打断来晚了（不是我自己刚点的）：服务端这一轮已经自动继续。
+                        // 绝不能假装循环停了，否则用户会一直等一个并不存在的暂停。
+                        appendNotice("你的打断来晚了 —— 这一轮已经自动继续。"
+                            + "下一轮的 3 秒窗口会重新给你。");
+                    }
+                }
+                else if (event.role === "resume" || event.role === "suggest") {
+                    windowOpen = false;
+                    windowState = "idle";
+                    bar.className = "";
+                    barPaused.style.display = "none";
+                    suggestBox.style.display = "none";
+                }
+                if (typeof event.seq === "number" && event.seq > latestSeq) {
+                    latestSeq = event.seq;
+                }
+            }
+
+            // ---------- 与后端交互 ----------
+
+            async function loadHistory() {
+                try {
+                    const response = await fetch(messagesUrl + "?after=0", { headers: { "Accept": "application/json" } });
+                    if (!response.ok) { return; }
+                    const data = await response.json();
+                    (data.messages || []).forEach(appendMessage);
+                    if (data.session) { renderSession(data.session); }
+                } catch (error) {
+                    appendNotice("拉取历史失败：" + error);
+                }
+            }
+
+            async function loadSession() {
+                try {
+                    const response = await fetch(sessionUrl, { headers: { "Accept": "application/json" } });
+                    if (!response.ok) { return; }
+                    renderSession(await response.json());
+                } catch (error) { /* 静默 */ }
+            }
+
+            function renderSession(session) {
+                if (!session) { return; }
+                taskElement.textContent = session.task ? ("任务：" + session.task) : "";
+                roundElement.textContent = "第 " + (session.round_index || 0) + " 轮";
+                if (session.status === "finished") {
+                    roundElement.textContent += "（已结束）";
+                }
+            }
+
+            async function postHuman(kind, content) {
+                const body = { kind: kind };
+                if (content) { body.content = content; }
+                try {
+                    const response = await fetch(humanUrl, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(body)
+                    });
+                    if (!response.ok) {
+                        appendNotice("操作失败（HTTP " + response.status + "）");
+                        return false;
+                    }
+                    return true;
+                } catch (error) {
+                    appendNotice("操作失败：" + error);
+                    return false;
+                }
+            }
+
+            document.getElementById("btn-interrupt").addEventListener("click", async function () {
+                const wasOpen = windowOpen;
+                window.clearInterval(windowTimer);
+                windowOpen = false;
+                lastInterruptAt = Date.now();
+                if (!await postHuman("interrupt")) {
+                    return;
+                }
+                if (wasOpen) {
+                    appendNotice("你已打断循环，等你的下一步决定。");
+                    enterPaused();
+                } else {
+                    // 倒计时已经走完，服务端多半已经往下走了。即使它刚好还在
+                    // 竞态兜底窗口内、最终返回 paused，稍后的关闭事件也会把
+                    // 暂停面板补上 —— 宁可先少承诺，不要先假装停了。
+                    appendNotice("你的打断来晚了 —— 这一轮已经自动继续；"
+                        + "下一轮的 3 秒窗口会重新给你。");
+                    windowState = "idle";
+                    bar.className = "";
+                    barWaiting.style.display = "none";
+                }
+            });
+            document.getElementById("btn-resume").addEventListener("click", async function () {
+                if (await postHuman("resume")) { appendNotice("已恢复循环。"); }
+                bar.className = ""; barPaused.style.display = "none"; windowState = "idle";
+            });
+            document.getElementById("btn-suggest").addEventListener("click", function () {
+                suggestBox.style.display = "block";
+                suggestText.focus();
+            });
+            document.getElementById("btn-suggest-cancel").addEventListener("click", function () {
+                suggestBox.style.display = "none";
+            });
+            document.getElementById("btn-suggest-send").addEventListener("click", async function () {
+                const text = suggestText.value.trim();
+                if (!text) { suggestText.focus(); return; }
+                if (await postHuman("suggest", text)) {
+                    appendNotice("建议已提交，循环继续。");
+                    suggestText.value = "";
+                    suggestBox.style.display = "none";
+                    bar.className = ""; barPaused.style.display = "none"; windowState = "idle";
+                }
+            });
+
+            function sendNote() {
+                const message = inputElement.value.trim();
+                if (!message) { return; }
+                postHuman("note", message).then(function (ok) {
+                    if (ok) { inputElement.value = ""; }
+                });
+                inputElement.focus();
+            }
+            inputElement.addEventListener("keyup", function (event) {
+                if (event.key === "Enter" && !event.isComposing) { sendNote(); }
+            });
+            document.getElementById("chat-message-submit").addEventListener("click", sendNote);
+            document.getElementById("chat-clear").addEventListener("click", function () {
+                logElement.textContent = "";
+            });
+
+            function connect() {
+                setStatus("connecting", "连接中…");
+                socket = new WebSocket(websocketUrl());
+                socket.onopen = function () { retryCount = 0; setStatus("open", "已连接"); };
+                socket.onmessage = function (event) {
+                    let payload;
+                    try { payload = JSON.parse(event.data); } catch (error) { payload = event.data; }
+                    handleEvent(payload);
+                };
+                socket.onerror = function () { setStatus("error", "连接出错"); };
+                socket.onclose = function (event) {
+                    if (event.code === 3000) {
+                        setStatus("error", "连接被拒绝（code 3000，请检查 token）");
+                        return;
+                    }
+                    const delay = Math.min(30000, 1000 * Math.pow(2, retryCount));
+                    retryCount += 1;
+                    setStatus("closed", "连接已关闭（code " + event.code + "），"
+                        + Math.round(delay / 1000) + " 秒后重连");
+                    reconnectTimer = window.setTimeout(connect, delay);
+                };
+            }
+
+            window.addEventListener("beforeunload", function () {
+                window.clearTimeout(reconnectTimer);
+                window.clearInterval(windowTimer);
+                if (socket) { socket.onclose = null; socket.close(); }
+            });
+
+            loadSession();
+            loadHistory();
+            connect();
+        })();
+    </script>
+</body>
+</html>

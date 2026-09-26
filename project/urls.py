@@ -38,5 +38,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('ht/', CustomHealthCheckView.as_view(), name='health_check_home'),
     path('ht/<str:subset>/', CustomHealthCheckView.as_view(), name='health_check_subset'),
+    # AI 会议室（council）的 HTTP 接口与页面。
+    # 必须排在 generic.urls 前面：generic.urls 里的 room/<room_name>/
+    # 用的是 \w+ 单段匹配，先注册 council 前缀可以避免歧义。
+    path('ws/generic/council/', include("generic.council_urls")),
     path('ws/generic/', include("generic.urls")),
 ]

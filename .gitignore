@@ -160,3 +160,10 @@ cython_debug/
 #.idea/
 .env
 log
+
+# 本工作区内的工作目录型 Kimi Code CLI 家目录（含 OAuth 凭据，禁止入库）
+.kimi-home/
+# AgentTeams 运行期状态目录
+.agent-teams/
+# 插件发布产物（npm pack / gh release 的附件，不入库）
+dsh-plugin/*.tgz

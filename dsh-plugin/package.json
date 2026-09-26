@@ -1,0 +1,56 @@
+{
+  "name": "dsh-plugin-ai-council",
+  "version": "0.1.0",
+  "description": "AI Council for DeepSeek Harness: 让 DeepSeek 做计划/编码/执行/评价，每一步都交给 Kimi、Claude 等异模型迭代评审，并在每轮 AI 反馈后留出 3 秒人工打断窗口。底层复用 django-generic-websocket-project 的 HTTP + WebSocket 广播服务。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "test",
+    "scripts",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "Xiang Wang",
+    "email": "ramwin@qq.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ramwin/django-generic-websocket-project.git",
+    "directory": "dsh-plugin"
+  },
+  "homepage": "https://github.com/ramwin/django-generic-websocket-project/tree/main/dsh-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/ramwin/django-generic-websocket-project/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "council",
+    "multi-model",
+    "review",
+    "kimi",
+    "claude",
+    "human-in-the-loop",
+    "approval"
+  ]
+}
